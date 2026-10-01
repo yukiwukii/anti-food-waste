@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Leftover Scale</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand-row">
+      <h1>Leftover Scale</h1>
+      <span class="conn" id="conn">Connecting…</span>
+    </div>
+    <p class="muted">A food-waste bin with a weighing scale and a camera. It logs what gets thrown away so food-court vendors can see real daily demand and cook less surplus.</p>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button role="tab" id="tab-bin" aria-controls="view-bin" aria-selected="true">Live bin</button>
+    <button role="tab" id="tab-insights" aria-controls="view-insights" aria-selected="false">Vendor insights</button>
+    <button role="tab" id="tab-compost" aria-controls="view-compost" aria-selected="false">Compost</button>
+    <button role="tab" id="tab-proposal" aria-controls="view-proposal" aria-selected="false">Proposal</button>
+  </nav>
+
+  <!-- LIVE BIN -->
+  <section class="view" id="view-bin" role="tabpanel" aria-labelledby="tab-bin">
+    <div class="view-head">
+      <h2>Weigh food into the bin</h2>
+      <p class="muted">Each weigh-in is saved to the database. Add a photo and Claude identifies the dish from the stall's menu.</p>
+    </div>
+    <div class="bin-grid">
+      <div class="unit" aria-live="polite">
+        <div class="unit-head"><span id="unit-id">Bin</span><span id="unit-status">Ready</span></div>
+        <div class="cam" id="cam">
+          <canvas id="cam-canvas" width="640" height="400" aria-label="Bin camera view"></canvas>
+          <img id="cam-photo" alt="Last photo taken by the bin camera" hidden>
+          <div class="scanline"></div>
+          <div class="rec">CAM 1</div>
+          <div class="tag"><span id="cam-dish">Waiting for food</span><span id="cam-conf">–</span></div>
+        </div>
+        <div class="readouts">
+          <div class="lcd">
+            <small>Scale · this item</small>
+            <div class="big"><span id="lcd-weight">0.000</span><span class="u">kg</span></div>
+          </div>
+          <div class="lcd">
+            <small>Bin load</small>
+            <div class="big"><span id="lcd-load">0.0</span><span class="u" id="lcd-cap">/ 40 kg</span></div>
+            <div class="gauge" id="gauge"><i></i></div>
+          </div>
+        </div>
+      </div>
+
+      <form class="controls panel" id="drop-form" novalidate>
+        <div class="field">
+          <label for="sel-location">Bin location</label>
+          <select id="sel-location"></select>
+        </div>
+        <div class="field">
+          <label for="sel-stall">Stall</label>
+          <select id="sel-stall"></select>
+        </div>
+        <fieldset>
+          <legend>Who is throwing it away</legend>
+          <div class="seg">
+            <input type="radio" name="source" id="src-plate" value="plate" checked>
+            <label for="src-plate">Customer plate<span>Uneaten food</span></label>
+            <input type="radio" name="source" id="src-vendor" value="vendor">
+            <label for="src-vendor">Vendor, end of day<span>Unsold food</span></label>
+          </div>
+        </fieldset>
+        <div class="field">
+          <label for="in-weight">Weight on scale (kg)</label>
+          <div class="inline">
+            <input type="number" id="in-weight" min="0.001" max="25" step="0.001" required>
+            <button class="btn ghost" type="button" id="btn-scale">Read scale</button>
+          </div>
+          <span class="hint">No scale attached? Read scale fills in a typical weight for the selected source.</span>
+        </div>
+        <div class="field">
+          <label for="in-photo">Camera photo (optional)</label>
+          <input type="file" id="in-photo" accept="image/jpeg,image/png,image/webp,image/gif" capture="environment">
+        </div>
+        <div class="field">
+          <label for="sel-dish">Dish label if no photo (optional)</label>
+          <select id="sel-dish"></select>
+        </div>
+        <p class="error" id="drop-error" hidden></p>
+        <div class="btn-row">
+          <button class="btn" type="submit" id="btn-drop">Save weigh-in</button>
+          <button class="btn ghost" type="button" id="btn-rush">Simulate lunch rush (12 items)</button>
+        </div>
+        <div>
+          <div class="label" style="margin-bottom:6px">Today at this bin · <span id="log-count" class="num">0</span> items</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Time</th><th>Stall</th><th>Dish</th><th>Source</th><th>Identified by</th><th class="r">kg</th></tr></thead>
+              <tbody id="log-body"></tbody>
+            </table>
+          </div>
+          <p class="empty" id="log-empty">Nothing weighed at this bin today.</p>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <!-- INSIGHTS -->
+  <section class="view" id="view-insights" role="tabpanel" aria-labelledby="tab-insights" hidden>
+    <div class="view-head">
+      <h2>What each vendor should cook</h2>
+      <p class="muted">Portions cooked come from the vendor. Unsold food weighed at closing gives unsold portions, so portions sold = cooked − unsold.</p>
+    </div>
+    <div class="chips" id="stall-chips" role="group" aria-label="Choose a stall"></div>
+    <div class="panel">
+      <div class="kpis" id="kpis"></div>
+      <div class="chart-wrap" id="chart"></div>
+      <div class="legend">
+        <span><i style="background:var(--accent)"></i>Portions sold</span>
+        <span><i style="background:var(--waste)"></i>Portions unsold</span>
+        <span><i style="background:transparent;border-top:2px dashed var(--ink);height:0;border-radius:0"></i>Suggested weekday prep</span>
+      </div>
+    </div>
+    <div class="two">
+      <div class="rec-box" id="rec"></div>
+      <div class="panel">
+        <h3>Today</h3>
+        <form id="prep-form" class="inline">
+          <div class="field">
+            <label for="in-prep">Portions cooked today</label>
+            <input type="number" id="in-prep" min="0" max="5000" step="1" required>
+          </div>
+          <button class="btn" type="submit">Save</button>
+        </form>
+        <div id="today"></div>
+        <p class="note">Takeaway meals never reach the bin, so customer plate waste is only partly captured. Vendor end-of-day leftovers are captured in full, and those drive the prep suggestion.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- COMPOST -->
+  <section class="view" id="view-compost" role="tabpanel" aria-labelledby="tab-compost" hidden>
+    <div class="view-head">
+      <h2>From bin to compost</h2>
+      <p class="muted">Once food is weighed and logged, staff empty the bin into the compost bin instead of the general trash.</p>
+    </div>
+    <ol class="flow">
+      <li><b>Collect</b>Customers and vendors put food in the bin.</li>
+      <li><b>Weigh and photograph</b>Scale and camera record each item.</li>
+      <li><b>Log</b>Weight, dish and stall are saved.</li>
+      <li><b>Compost</b>Staff empty the bin into the compost bin.</li>
+      <li><b>Report</b>Vendors get a daily prep suggestion.</li>
+    </ol>
+    <div class="two">
+      <div class="bins" id="bins"></div>
+      <div class="panel">
+        <h3>Compost bin</h3>
+        <div class="tank">
+          <div class="tank-vis compost" id="tank-compost"><i></i></div>
+          <div class="tank-stats">
+            <div class="label">Food diverted from trash</div>
+            <div class="v"><span id="compost-kg">0.0</span> kg</div>
+            <p class="muted">About <b id="compost-out" class="num">0.0 kg</b> of finished compost (roughly 30% of input mass).</p>
+            <p class="muted">Transfers recorded: <b id="transfers" class="num">0</b></p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>When</th><th>Bin</th><th class="r">kg</th></tr></thead>
+            <tbody id="transfer-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PROPOSAL -->
+  <section class="view" id="view-proposal" role="tabpanel" aria-labelledby="tab-proposal" hidden>
+    <div class="view-head">
+      <h2>The proposal</h2>
+      <p class="muted">Why we built this, and what we expect to happen.</p>
+    </div>
+    <div class="prop">
+      <div class="panel">
+        <span class="label">Problem</span>
+        <h3>Food is left over at the end of the day</h3>
+        <p>Food-court vendors cook more than they sell, and the surplus is thrown away at closing.</p>
+      </div>
+      <div class="panel">
+        <span class="label">Proposed solution</span>
+        <h3>A food bin with a scale and cameras</h3>
+        <ul>
+          <li>The bin measures food waste by weight and identifies the dish with a camera.</li>
+          <li>The data tells vendors their average daily consumption, so they can cook less surplus.</li>
+          <li>The food waste is then transferred to a compost bin.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <span class="label">1 · Enforcement and public acceptance</span>
+        <ul>
+          <li>The solution targets vendors, so enforcement and public acceptance are not an issue.</li>
+          <li>Vendors should be open to it, because it saves food preparation costs.</li>
+          <li>Bins in common eating areas such as North Spine and South Spine are convenient for consumers to use.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <span class="label">2 · Unintended consequences</span>
+        <ul>
+          <li>Vendors have additional work if they use the bin. We think the long-term savings are worth it.</li>
+          <li>Data is incomplete because some customers take their food away. Some data is still better than no data.</li>
+        </ul>
+      </div>
+      <div class="panel wide">
+        <span class="label">3 · Root cause</span>
+        <p>Vendors find it hard to estimate daily food consumption because they do not have enough data. A food-waste bin that collects this data addresses the cause directly.</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
