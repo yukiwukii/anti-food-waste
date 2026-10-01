@@ -1,13 +1,15 @@
 """Reference data for NTU North Spine and South Spine, plus optional demo history.
 
-Demo history is generated with a fixed seed and is marked classified_by="seed",
-so it is never mistaken for real weigh-ins.
+Demo history is generated with a fixed seed. Its weigh-ins are marked classified_by="seed" and its
+prep logs and compost transfers is_demo=True, so it is never mistaken for real data and can be
+removed and regenerated. The window always ends yesterday, so the chart has no gap on the day of a demo.
 """
 
 import random
 from datetime import date, datetime, time, timedelta
 
-from sqlmodel import Session, select
+from sqlalchemy import func
+from sqlmodel import Session, col, delete, select
 
 from .config import now
 from .models import Bin, CompostTransfer, Drop, Location, PrepLog, Stall
@@ -45,11 +47,37 @@ def ensure_reference_data(session: Session) -> None:
     session.commit()
 
 
-def seed_demo_history(session: Session, days: int = 14, today: date | None = None) -> bool:
-    """Add `days` of history before today. Skips if any prep log already exists."""
-    if session.exec(select(PrepLog).limit(1)).first():
-        return False
+DEMO_DAYS = 14
+
+
+def clear_demo_history(session: Session) -> None:
+    session.exec(delete(Drop).where(Drop.classified_by == "seed"))
+    session.exec(delete(CompostTransfer).where(col(CompostTransfer.is_demo)))
+    session.exec(delete(PrepLog).where(col(PrepLog.is_demo)))
+    session.commit()
+
+
+def reset_demo_history(session: Session, today: date | None = None) -> None:
+    """Replace the demo history with a fresh window ending yesterday. Real data is kept."""
+    clear_demo_history(session)
+    seed_demo_history(session, today=today)
+
+
+def refresh_demo_history(session: Session, today: date | None = None) -> None:
+    """At startup: add demo history to a new database, or move a stale window forward to end yesterday."""
     today = today or now().date()
+    last_demo_day = session.exec(select(func.max(PrepLog.day)).where(col(PrepLog.is_demo))).one()
+    if last_demo_day is None:
+        if session.exec(select(PrepLog).limit(1)).first() is None:
+            seed_demo_history(session, today=today)
+    elif last_demo_day < today - timedelta(days=1):
+        reset_demo_history(session, today=today)
+
+
+def seed_demo_history(session: Session, days: int = DEMO_DAYS, today: date | None = None) -> None:
+    """Add `days` of demo history ending yesterday. Stall-days that already have a real prep log are skipped."""
+    today = today or now().date()
+    real_days = {(p.stall_id, p.day) for p in session.exec(select(PrepLog).where(~col(PrepLog.is_demo)))}
     rng = random.Random(20261001)
     bin_for_loc = {b.location_id: b.id for b in BINS}
 
@@ -62,7 +90,9 @@ def seed_demo_history(session: Session, days: int = 14, today: date | None = Non
             prepared = round(prep * (0.7 if weekend else 1) * rng.gauss(1, 0.04))
             sold = min(prepared, demand)
             unsold = prepared - sold
-            session.add(PrepLog(stall_id=sid, day=day, portions=prepared))
+            if (sid, day) in real_days:
+                continue
+            session.add(PrepLog(stall_id=sid, day=day, portions=prepared, is_demo=True))
             bin_id = bin_for_loc[loc]
 
             # Customer plate waste through the day; only eat-in meals reach the bin.
@@ -85,10 +115,13 @@ def seed_demo_history(session: Session, days: int = 14, today: date | None = Non
 
         # Staff empty each bin into compost after closing.
         for bin_id, drops in day_drops.items():
+            if not drops:
+                continue
             transfer = CompostTransfer(
                 bin_id=bin_id,
                 weight_kg=round(sum(d.weight_kg for d in drops), 3),
                 created_at=datetime.combine(day, time(21, 15)),
+                is_demo=True,
             )
             session.add(transfer)
             session.flush()
@@ -96,4 +129,3 @@ def seed_demo_history(session: Session, days: int = 14, today: date | None = Non
                 d.transfer_id = transfer.id
                 session.add(d)
     session.commit()
-    return True

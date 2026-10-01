@@ -10,7 +10,9 @@ Smart food-waste bins for NTU's North Spine and South Spine food courts. Each bi
 - **Compost tracking**: staff record each time a bin is emptied into compost. The page shows the total food diverted from the trash.
 - **Web dashboard** at `/`, with Live bin, Vendor insights, and Compost tabs.
 
-On first start the server adds 14 days of demo history (fixed random seed, marked `classified_by="seed"`), so the insights have data to show. Turn this off with `LEFTOVER_SEED_DEMO=0`.
+On first start the server adds 14 days of demo history (fixed random seed, marked as demo in the database), so the insights have data to show. The window always ends yesterday: if the server starts on a later day, it moves the demo history forward. The "Reset demo data" button on the Vendor insights tab does the same on demand. Real weigh-ins and portions entered by vendors are never touched. Turn demo data off with `LEFTOVER_SEED_DEMO=0`.
+
+The Vendor insights tab refreshes every 5 seconds while it is open. Today appears as a dashed, unfinished bar and is not used for the prep suggestion until the day is over.
 
 ## Run it
 
@@ -69,7 +71,8 @@ uv run pytest
 | POST | `/api/bins/{bin_id}/transfers` | Empty the bin into compost |
 | GET | `/api/compost` | Totals, bins, and recent transfers |
 | PUT | `/api/stalls/{stall_id}/prep` | Portions cooked on a day (`{"day": "2026-10-01", "portions": 180}`) |
-| GET | `/api/stalls/{stall_id}/insights` | Daily history, prep suggestion, and today's figures |
+| GET | `/api/stalls/{stall_id}/insights` | Daily history including today so far, prep suggestion, and today's figures |
+| POST | `/api/demo/reset` | Regenerate demo history ending yesterday; real data is kept |
 
 Interactive API docs: http://127.0.0.1:8000/docs.
 

@@ -1,5 +1,6 @@
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated, Literal, Optional
@@ -16,7 +17,7 @@ from .classifier import classify, vision_ready
 from .db import engine, get_session, init_db
 from .insights import build_day, suggest
 from .models import Bin, CompostTransfer, Drop, Location, PrepLog, Stall
-from .seed import ensure_reference_data, seed_demo_history
+from .seed import ensure_reference_data, refresh_demo_history, reset_demo_history
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
@@ -28,7 +29,7 @@ async def lifespan(_app: FastAPI):
     with Session(engine) as session:
         ensure_reference_data(session)
         if config.SEED_DEMO:
-            seed_demo_history(session)
+            refresh_demo_history(session)
     yield
 
 
@@ -290,9 +291,17 @@ def stall_insights(stall_id: str, session: SessionDep, days: int = Query(14, ge=
         for day in sorted(preps)
         if day < today
     ]
+    # Today is still open, so it is charted but left out of the suggestion.
+    today_row = build_day(
+        today, preps.get(today), unsold_kg.get(today, 0.0), plate_kg.get(today, 0.0), stall.portion_g, partial=True
+    )
+    demo_days = {
+        p.day for p in session.exec(select(PrepLog).where(PrepLog.stall_id == stall_id, col(PrepLog.is_demo)))
+    }
     return {
         "stall": stall,
-        "history": history,
+        "history": [{**asdict(r), "demo": r.day in demo_days} for r in history]
+        + [{**asdict(today_row), "demo": False}],
         "suggestion": suggest(history, stall.portion_g, stall.cost_per_portion),
         "today": {
             "day": today,
@@ -304,6 +313,13 @@ def stall_insights(stall_id: str, session: SessionDep, days: int = Query(14, ge=
             "not_waste_drops": sum(1 for d in drops if d.created_at.date() == today and not d.is_waste),
         },
     }
+
+
+@app.post("/api/demo/reset")
+def reset_demo(session: SessionDep):
+    """Regenerate the demo history so it ends yesterday. Real weigh-ins and prep logs are kept."""
+    reset_demo_history(session)
+    return {"ok": True}
 
 
 # ---------- frontend ----------

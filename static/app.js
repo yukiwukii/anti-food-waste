@@ -395,7 +395,7 @@
       var b = document.createElement("button");
       b.type = "button"; b.textContent = state.stalls[id].name;
       b.setAttribute("aria-pressed", id === state.insightStall ? "true" : "false");
-      b.addEventListener("click", function () { state.insightStall = id; renderChips(); loadInsights(); });
+      b.addEventListener("click", function () { state.insightStall = id; state.prepDirty = false; renderChips(); loadInsights(); });
       chips.appendChild(b);
     });
   }
@@ -407,12 +407,14 @@
   function renderChart(stall, rows, suggested) {
     if (!rows.length) { $("chart").innerHTML = '<p class="empty">No days with portions cooked yet.</p>'; return; }
     var W = 720, H = 280, L = 44, R = 12, T = 14, B = 40;
-    var max = Math.max.apply(null, rows.map(function (r) { return r.prepared; }).concat([suggested || 0]));
-    var step = max > 400 ? 100 : 50, top = Math.max(step, Math.ceil(max / step) * step);
+    var max = Math.max.apply(null, rows.map(function (r) { return r.prepared == null ? r.unsold : r.prepared; }).concat([suggested || 0, 10]));
+    var step = max > 400 ? 100 : max > 120 ? 50 : 20, top = Math.ceil(max / step) * step;
     var y = function (v) { return T + (H - T - B) * (1 - v / top); };
     var bw = (W - L - R) / rows.length;
     var ink = cssVar("--ink"), muted = cssVar("--muted"), line = cssVar("--line"), acc = cssVar("--accent"), waste = cssVar("--waste");
-    var out = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Portions sold and unsold per day for ' + esc(stall.name) + '">';
+    var out = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Portions sold and unsold per day for ' + esc(stall.name) + '">' +
+      '<defs><pattern id="todayHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">' +
+      '<rect width="6" height="6" fill="' + acc + '" opacity="0.35"/><line x1="0" y1="0" x2="0" y2="6" stroke="' + acc + '" stroke-width="3"/></pattern></defs>';
     for (var v = 0; v <= top; v += step) {
       out += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '" stroke="' + line + '"/>';
       out += '<text x="' + (L - 8) + '" y="' + (y(v) + 4) + '" text-anchor="end" font-size="11" fill="' + muted + '" font-family="JetBrains Mono, monospace">' + v + '</text>';
@@ -420,22 +422,44 @@
     rows.forEach(function (r, i) {
       var x = L + i * bw + bw * 0.18, w = bw * 0.64;
       var d = new Date(r.day + "T00:00:00");
-      out += '<rect x="' + x + '" y="' + y(r.sold) + '" width="' + w + '" height="' + (y(0) - y(r.sold)) + '" fill="' + acc + '"><title>' + r.sold + ' sold</title></rect>';
-      out += '<rect x="' + x + '" y="' + y(r.prepared) + '" width="' + w + '" height="' + (y(r.sold) - y(r.prepared)) + '" fill="' + waste + '"><title>' + r.unsold + ' unsold (' + fmt(r.unsold_kg, 1) + ' kg)</title></rect>';
-      out += '<text x="' + (x + w / 2) + '" y="' + (H - B + 16) + '" text-anchor="middle" font-size="11" fill="' + (r.weekend ? muted : ink) + '" font-family="Public Sans, sans-serif">' + d.toLocaleDateString("en-SG", { weekday: "short" }) + '</text>';
+      if (r.partial) {
+        // Today: sold so far is hatched, unsold so far solid, whole bar outlined with a dashed edge.
+        if (r.sold != null) {
+          out += '<rect x="' + x + '" y="' + y(r.sold) + '" width="' + w + '" height="' + (y(0) - y(r.sold)) + '" fill="url(#todayHatch)"><title>Today so far: ' + r.sold + ' sold</title></rect>';
+        }
+        var base = r.sold == null ? 0 : r.sold;
+        out += '<rect x="' + x + '" y="' + y(base + r.unsold) + '" width="' + w + '" height="' + (y(base) - y(base + r.unsold)) + '" fill="' + waste + '"><title>Today so far: ' + r.unsold + ' unsold (' + fmt(r.unsold_kg, 1) + ' kg)</title></rect>';
+        var topV = r.prepared == null ? r.unsold : r.prepared;
+        out += '<rect x="' + x + '" y="' + y(topV) + '" width="' + w + '" height="' + (y(0) - y(topV)) + '" fill="none" stroke="' + ink + '" stroke-width="1.5" stroke-dasharray="4 3"/>';
+        if (r.prepared == null) {
+          out += '<text x="' + (x + w) + '" y="' + (y(r.unsold) - 8) + '" text-anchor="end" font-size="10" fill="' + muted + '" font-family="Public Sans, sans-serif">cooked count not entered</text>';
+        }
+        out += '<text x="' + (x + w / 2) + '" y="' + (H - B + 16) + '" text-anchor="middle" font-size="11" font-weight="700" fill="' + ink + '" font-family="Public Sans, sans-serif">Today</text>';
+      } else {
+        out += '<rect x="' + x + '" y="' + y(r.sold) + '" width="' + w + '" height="' + (y(0) - y(r.sold)) + '" fill="' + acc + '"><title>' + r.sold + ' sold</title></rect>';
+        out += '<rect x="' + x + '" y="' + y(r.prepared) + '" width="' + w + '" height="' + (y(r.sold) - y(r.prepared)) + '" fill="' + waste + '"><title>' + r.unsold + ' unsold (' + fmt(r.unsold_kg, 1) + ' kg)</title></rect>';
+        out += '<text x="' + (x + w / 2) + '" y="' + (H - B + 16) + '" text-anchor="middle" font-size="11" fill="' + (r.weekend ? muted : ink) + '" font-family="Public Sans, sans-serif">' + d.toLocaleDateString("en-SG", { weekday: "short" }) + '</text>';
+      }
       out += '<text x="' + (x + w / 2) + '" y="' + (H - B + 30) + '" text-anchor="middle" font-size="10" fill="' + muted + '" font-family="JetBrains Mono, monospace">' + d.getDate() + '/' + (d.getMonth() + 1) + '</text>';
     });
     if (suggested) {
       var sy = y(suggested);
       out += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + sy + '" y2="' + sy + '" stroke="' + ink + '" stroke-width="1.5" stroke-dasharray="6 4"/>';
-      out += '<text x="' + (W - R - 4) + '" y="' + (sy - 6) + '" text-anchor="end" font-size="11" font-weight="600" fill="' + ink + '" font-family="Public Sans, sans-serif">Suggested weekday prep: ' + suggested + '</text>';
+      out += '<text x="' + (W - R - 4) + '" y="' + (sy - 6) + '" text-anchor="end" font-size="11" font-weight="600" fill="' + ink + '" stroke="' + cssVar("--surface") + '" stroke-width="4" paint-order="stroke" font-family="Public Sans, sans-serif">Suggested weekday prep: ' + suggested + '</text>';
     }
     $("chart").innerHTML = out + "</svg>";
   }
 
-  function loadInsights() {
-    if (!state.insightStall) return;
-    api("/api/stalls/" + state.insightStall + "/insights").then(function (data) {
+  function loadInsights(quiet) {
+    if (!state.insightStall) return Promise.resolve();
+    var stallId = state.insightStall;
+    return api("/api/stalls/" + stallId + "/insights").then(function (data) {
+      if (stallId !== state.insightStall) return; // the user switched stall while this was loading
+      $("insights-updated").textContent = "Updated " + new Date().toLocaleTimeString("en-SG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      // Polling: skip the redraw when nothing changed, so the page doesn't flicker.
+      var key = JSON.stringify(data);
+      if (quiet && key === state.insightsKey) return;
+      state.insightsKey = key;
       var s = data.stall, sg = data.suggestion, t = data.today;
       if (sg) {
         $("kpis").innerHTML =
@@ -453,7 +477,12 @@
         $("rec").innerHTML = '<span class="label">Recommendation for ' + esc(s.name) + '</span><p>Needs at least 3 weekdays of portions cooked and closing weigh-ins before it can suggest a number.</p>';
       }
       renderChart(s, data.history, sg && sg.suggested_prep);
-      $("in-prep").value = t.prepared == null ? "" : t.prepared;
+      var demo = data.history.filter(function (r) { return r.demo; });
+      $("demo-note").textContent = demo.length
+        ? demo.length + " of the earlier days (" + shortDate(demo[0].day) + " to " + shortDate(demo[demo.length - 1].day) + ") are generated demo data."
+        : "All days shown are real data.";
+      // Don't overwrite a number the vendor is typing.
+      if (document.activeElement !== $("in-prep") && !state.prepDirty) $("in-prep").value = t.prepared == null ? "" : t.prepared;
       $("today").innerHTML = '<table><tbody>' +
         '<tr><td>Items weighed</td><td class="r">' + t.drops + '</td></tr>' +
         '<tr><td>Not counted (no food waste in photo)</td><td class="r">' + t.not_waste_drops + '</td></tr>' +
@@ -462,8 +491,32 @@
         '<tr><td>Unsold portions (' + s.portion_g + ' g each)</td><td class="r">' + t.unsold_portions + '</td></tr>' +
         (t.prepared != null ? '<tr><td>Portions sold so far</td><td class="r">' + Math.max(0, t.prepared - t.unsold_portions) + '</td></tr>' : '') +
         '</tbody></table>';
-    }).catch(function (e) { toast(e.message); });
+    }).catch(function (e) {
+      if (quiet) $("insights-updated").textContent = "Cannot reach the server";
+      else toast(e.message);
+    });
   }
+
+  function shortDate(iso) { return new Date(iso + "T00:00:00").toLocaleDateString("en-SG", { day: "numeric", month: "short" }); }
+
+  // Refresh the open insights tab every 5 seconds so new weigh-ins show up during a demo.
+  setInterval(function () {
+    if (state.tab === "insights" && !document.hidden) loadInsights(true);
+  }, 5000);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && state.tab === "insights") loadInsights(true);
+  });
+
+  $("in-prep").addEventListener("input", function () { state.prepDirty = true; });
+
+  $("btn-reset-demo").addEventListener("click", function () {
+    if (!window.confirm("Replace the demo history with a fresh 14 days ending yesterday? Real weigh-ins and portions you entered are kept.")) return;
+    var btn = $("btn-reset-demo"); btn.disabled = true;
+    api("/api/demo/reset", { method: "POST" })
+      .then(function () { toast("Demo data reset"); state.insightsKey = null; return loadInsights(); })
+      .catch(function (e) { toast(e.message); })
+      .finally(function () { btn.disabled = false; });
+  });
 
   $("prep-form").addEventListener("submit", function (e) {
     e.preventDefault();
@@ -472,7 +525,7 @@
     api("/api/stalls/" + state.insightStall + "/prep", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ day: state.today, portions: n })
-    }).then(function () { toast("Saved " + n + " portions for today"); loadInsights(); })
+    }).then(function () { state.prepDirty = false; toast("Saved " + n + " portions for today"); loadInsights(); })
       .catch(function (e) { toast(e.message); });
   });
 

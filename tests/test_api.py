@@ -66,7 +66,9 @@ def test_photo_without_classifier_is_stored(client):
 
 def test_insights_from_seeded_history(client):
     data = client.get("/api/stalls/cr/insights").json()
-    assert len(data["history"]) == 14
+    assert len(data["history"]) == 15  # 14 demo days + today
+    assert all(r["demo"] for r in data["history"][:-1])
+    assert data["history"][-1]["partial"] and not data["history"][-1]["demo"]
     s = data["suggestion"]
     assert s["suggested_prep"] < s["avg_prepared"]
     assert s["portions_saved_per_day"] > 0
@@ -138,4 +140,28 @@ def test_mixed_plate_counts_only_edible_share(client, monkeypatch):
     assert detail["model_prompt"] == "PROMPT"
     assert detail["model"] == "gpt-test"
     assert detail["stall_name"] == "Japanese"
+    client.post("/api/bins/SS-01/transfers")
+
+
+def test_today_row_updates_with_weigh_ins(client):
+    today = client.get("/api/health").json()["today"]
+    client.put("/api/stalls/in/prep", json={"day": today, "portions": 100})
+    row = client.get("/api/stalls/in/insights").json()["history"][-1]
+    assert row["day"] == today and row["prepared"] == 100
+    client.post("/api/bins/NS-01/drops", data={"stall_id": "in", "source": "vendor", "weight_kg": "4.0"})
+    row2 = client.get("/api/stalls/in/insights").json()["history"][-1]
+    assert row2["unsold"] == row["unsold"] + 10  # 4 kg / 400 g portions
+    assert row2["sold"] == 100 - row2["unsold"]
+    client.post("/api/bins/NS-01/transfers")
+
+
+def test_demo_reset_keeps_real_data(client):
+    today = client.get("/api/health").json()["today"]
+    client.put("/api/stalls/bm/prep", json={"day": today, "portions": 150})
+    r = client.post("/api/bins/SS-01/drops", data={"stall_id": "bm", "source": "plate", "weight_kg": "0.2"})
+    real_id = r.json()["drop"]["id"]
+    assert client.post("/api/demo/reset").status_code == 200
+    hist = client.get("/api/stalls/bm/insights").json()["history"]
+    assert len(hist) == 15 and hist[-1]["prepared"] == 150
+    assert client.get(f"/api/drops/{real_id}").status_code == 200
     client.post("/api/bins/SS-01/transfers")

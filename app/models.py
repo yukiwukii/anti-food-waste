@@ -63,6 +63,7 @@ class PrepLog(SQLModel, table=True):
     stall_id: str = Field(foreign_key="stall.id", index=True)
     day: date
     portions: int
+    is_demo: bool = False  # generated demo history, removed by a demo reset
 
 
 class CompostTransfer(SQLModel, table=True):
@@ -70,3 +71,4 @@ class CompostTransfer(SQLModel, table=True):
     bin_id: str = Field(foreign_key="bin.id", index=True)
     weight_kg: float
     created_at: NaiveDatetime = Field(default_factory=now)
+    is_demo: bool = False

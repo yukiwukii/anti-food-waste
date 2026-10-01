@@ -10,6 +10,7 @@ import math
 from dataclasses import dataclass
 from datetime import date
 from statistics import mean, pstdev
+from typing import Optional
 
 SAFETY_SD = 0.5
 OPEN_DAYS_PER_MONTH = 22
@@ -18,24 +19,30 @@ OPEN_DAYS_PER_MONTH = 22
 @dataclass
 class DayRow:
     day: date
-    prepared: int
+    prepared: Optional[int]  # None when the vendor has not entered portions cooked yet
     unsold_kg: float
     plate_kg: float
     unsold: int
-    sold: int
+    sold: Optional[int]
     weekend: bool
+    partial: bool = False  # the day is still in progress
 
 
-def build_day(day: date, prepared: int, unsold_kg: float, plate_kg: float, portion_g: int) -> DayRow:
-    unsold = min(prepared, round(unsold_kg * 1000 / portion_g))
+def build_day(
+    day: date, prepared: Optional[int], unsold_kg: float, plate_kg: float, portion_g: int, partial: bool = False
+) -> DayRow:
+    unsold = round(unsold_kg * 1000 / portion_g)
+    if prepared is not None:
+        unsold = min(prepared, unsold)
     return DayRow(
         day=day,
         prepared=prepared,
         unsold_kg=round(unsold_kg, 3),
         plate_kg=round(plate_kg, 3),
         unsold=unsold,
-        sold=prepared - unsold,
+        sold=None if prepared is None else prepared - unsold,
         weekend=day.weekday() >= 5,
+        partial=partial,
     )
 
 

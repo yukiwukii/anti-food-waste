@@ -244,3 +244,11 @@ dialog#detail::backdrop { background: rgba(0, 0, 0, 0.55); }
 }
 #detail summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
 @media (max-width: 560px) { .facts { grid-template-columns: minmax(0, 1fr); } }
+
+/* Insights: live today bar, refresh status, demo reset */
+.insights-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px 16px; }
+.insights-bar .btn-row { align-items: center; }
+.today-swatch {
+  background: repeating-linear-gradient(45deg, var(--accent) 0 2px, var(--accent-soft) 2px 5px);
+  outline: 1.5px dashed var(--ink); outline-offset: 1px;
+}

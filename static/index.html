@@ -123,7 +123,13 @@
       <h2>What each vendor should cook</h2>
       <p class="muted">Portions cooked come from the vendor. Unsold food weighed at closing gives unsold portions, so portions sold = cooked − unsold.</p>
     </div>
-    <div class="chips" id="stall-chips" role="group" aria-label="Choose a stall"></div>
+    <div class="insights-bar">
+      <div class="chips" id="stall-chips" role="group" aria-label="Choose a stall"></div>
+      <div class="btn-row">
+        <span class="conn" id="insights-updated" aria-live="polite"></span>
+        <button class="btn ghost" type="button" id="btn-reset-demo">Reset demo data</button>
+      </div>
+    </div>
     <div class="panel">
       <div class="kpis" id="kpis"></div>
       <div class="chart-wrap" id="chart"></div>
@@ -131,7 +137,9 @@
         <span><i style="background:var(--accent)"></i>Portions sold</span>
         <span><i style="background:var(--waste)"></i>Portions unsold</span>
         <span><i style="background:transparent;border-top:2px dashed var(--ink);height:0;border-radius:0"></i>Suggested weekday prep</span>
+        <span><i class="today-swatch"></i>Today, still in progress (not used for the suggestion)</span>
       </div>
+      <p class="hint" id="demo-note"></p>
     </div>
     <div class="two">
       <div class="rec-box" id="rec"></div>
