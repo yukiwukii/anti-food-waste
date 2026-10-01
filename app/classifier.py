@@ -1,6 +1,6 @@
-"""Identify the dish in a bin camera photo with Claude vision.
+"""Identify the dish in a bin camera photo with the OpenAI vision API.
 
-The bin always has a fallback: if there is no photo, Claude is switched off, or the call fails,
+The bin always has a fallback: if there is no photo, recognition is switched off, or the call fails,
 we keep whatever label the device sent (or none). A failed classification never blocks a weigh-in.
 """
 
@@ -9,10 +9,10 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
-import anthropic
+import openai
+from openai import OpenAI
 
 from . import config
 
@@ -20,21 +20,19 @@ log = logging.getLogger(__name__)
 
 OTHER = "other"
 
-_client: Optional[anthropic.Anthropic] = None
+_client: Optional[OpenAI] = None
 
 
-def _get_client() -> anthropic.Anthropic:
+def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        _client = anthropic.Anthropic(max_retries=1, timeout=30.0)
+        _client = OpenAI(max_retries=1, timeout=30.0)
     return _client
 
 
-def claude_credentials_found() -> bool:
-    """Best-effort check so the UI can say whether photo recognition will work."""
-    if any(os.environ.get(k) for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE")):
-        return True
-    return (Path.home() / ".config" / "anthropic").is_dir()
+def vision_ready() -> bool:
+    """Whether photo recognition can run, so the UI can say so."""
+    return config.CLASSIFIER != "off" and bool(os.environ.get("OPENAI_API_KEY"))
 
 
 @dataclass
@@ -42,6 +40,7 @@ class Classification:
     dish: Optional[str]
     confidence: Optional[float]
     classified_by: str
+    error: Optional[str] = None
 
 
 def classify(
@@ -55,16 +54,31 @@ def classify(
         confidence=None,
         classified_by="device" if device_label else "none",
     )
-    if not image or config.CLASSIFIER == "off":
+    if not image or not vision_ready():
         return fallback
     try:
-        return _classify_with_claude(image, media_type or "image/jpeg", menu)
-    except Exception as exc:  # network, auth, refusal, bad JSON: keep the weigh-in, lose the label
-        log.warning("Claude classification failed, using device label: %s", exc)
+        return _classify_with_openai(image, media_type or "image/jpeg", menu)
+    except Exception as exc:  # network, auth, bad JSON: keep the weigh-in, lose the label
+        log.warning("OpenAI classification failed, using device label: %s", exc)
+        fallback.error = _describe(exc)
         return fallback
 
 
-def _classify_with_claude(image: bytes, media_type: str, menu: list[str]) -> Classification:
+def _describe(exc: Exception) -> str:
+    if isinstance(exc, openai.AuthenticationError):
+        return "OpenAI rejected the API key. Check OPENAI_API_KEY and restart the server."
+    if isinstance(exc, openai.PermissionDeniedError):
+        return f"This OpenAI key cannot use {config.VISION_MODEL}. Set LEFTOVER_VISION_MODEL to a model your account can use."
+    if isinstance(exc, openai.NotFoundError):
+        return f"OpenAI model {config.VISION_MODEL} was not found. Set LEFTOVER_VISION_MODEL to a vision model your account can use."
+    if isinstance(exc, openai.RateLimitError):
+        return "OpenAI rate limit or quota reached. Check billing on your OpenAI account."
+    if isinstance(exc, openai.APIConnectionError):
+        return "Could not reach OpenAI. Check the internet connection."
+    return f"Dish recognition failed: {exc}"
+
+
+def _classify_with_openai(image: bytes, media_type: str, menu: list[str]) -> Classification:
     labels = menu + [OTHER]
     schema = {
         "type": "object",
@@ -82,33 +96,21 @@ def _classify_with_claude(image: bytes, media_type: str, menu: list[str]) -> Cla
         f'Use "{OTHER}" if the food does not match any of them or the photo shows no food. '
         "Set confidence between 0 and 1."
     )
-    response = _get_client().beta.messages.create(
-        model=config.CLAUDE_MODEL,
-        max_tokens=1024,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
-        messages=[
+    data_url = f"data:{media_type};base64,{base64.b64encode(image).decode('ascii')}"
+    response = _get_client().responses.create(
+        model=config.VISION_MODEL,
+        input=[
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": base64.standard_b64encode(image).decode("ascii"),
-                        },
-                    },
-                    {"type": "text", "text": prompt},
+                    {"type": "input_text", "text": prompt},
+                    {"type": "input_image", "image_url": data_url, "detail": "low"},
                 ],
             }
         ],
+        text={"format": {"type": "json_schema", "name": "dish_label", "schema": schema, "strict": True}},
     )
-    if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to classify the image")
-    text = next(b.text for b in response.content if b.type == "text")
-    data = json.loads(text)
+    data = json.loads(response.output_text)
     dish = data["dish"] if data["dish"] in labels else OTHER
     confidence = max(0.0, min(1.0, float(data["confidence"])))
-    return Classification(dish=dish, confidence=round(confidence, 2), classified_by="claude")
+    return Classification(dish=dish, confidence=round(confidence, 2), classified_by="openai")

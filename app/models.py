@@ -38,7 +38,7 @@ class Drop(SQLModel, table=True):
     weight_kg: float
     dish: Optional[str] = None
     confidence: Optional[float] = None
-    classified_by: str = "none"  # "claude", "device", "seed", "none"
+    classified_by: str = "none"  # "openai", "device", "seed", "none"
     image_file: Optional[str] = None
     created_at: NaiveDatetime = Field(default_factory=now, index=True)
     transfer_id: Optional[int] = Field(default=None, foreign_key="composttransfer.id", index=True)

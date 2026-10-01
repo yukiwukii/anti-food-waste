@@ -12,7 +12,7 @@ from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from . import config
-from .classifier import claude_credentials_found, classify
+from .classifier import classify, vision_ready
 from .db import engine, get_session, init_db
 from .insights import build_day, suggest
 from .models import Bin, CompostTransfer, Drop, Location, PrepLog, Stall
@@ -71,8 +71,8 @@ def health():
         "ok": True,
         "today": config.now().date(),
         "classifier": config.CLASSIFIER,
-        "claude_ready": config.CLASSIFIER != "off" and claude_credentials_found(),
-        "model": config.CLAUDE_MODEL,
+        "vision_ready": vision_ready(),
+        "model": config.VISION_MODEL,
     }
 
 
@@ -153,7 +153,11 @@ async def create_drop(
     session.add(drop)
     session.commit()
     session.refresh(drop)
-    return {"drop": _drop_out(drop), "bin_load_kg": round(load + drop.weight_kg, 3)}
+    return {
+        "drop": _drop_out(drop),
+        "bin_load_kg": round(load + drop.weight_kg, 3),
+        "recognition_error": result.error,
+    }
 
 
 @app.get("/api/drops")

@@ -5,10 +5,10 @@ Smart food-waste bins for NTU's North Spine and South Spine food courts. Each bi
 ## What it does
 
 - **Bin API**: the bin posts each weigh-in (stall, customer plate or vendor end-of-day, weight, optional photo) to the server. The server stores it in SQLite and refuses weigh-ins when the bin is full.
-- **Dish recognition**: if a photo is attached, Claude (`claude-opus-5-5`) picks the dish from that stall's menu. If there is no photo, no API key, or the call fails, the server keeps the label sent by the device and still saves the weigh-in.
+- **Live bin camera**: the Live bin page streams from a webcam. Each weigh-in captures a frame, and OpenAI vision (`gpt-5.4-mini` by default) picks the dish from that stall's menu. If there is no photo, no API key, or the call fails, the server keeps the label sent by the device and still saves the weigh-in.
 - **Vendor insights**: vendors enter how many portions they cooked each day. Unsold food weighed at closing gives unsold portions, so portions sold = cooked − unsold. The suggested weekday prep is average sales plus half a standard deviation. The page also shows the daily and monthly savings.
 - **Compost tracking**: staff record each time a bin is emptied into compost. The page shows the total food diverted from the trash.
-- **Web dashboard** at `/`, with Live bin, Vendor insights, Compost, and Proposal tabs.
+- **Web dashboard** at `/`, with Live bin, Vendor insights, and Compost tabs.
 
 On first start the server adds 14 days of demo history (fixed random seed, marked `classified_by="seed"`), so the insights have data to show. Turn this off with `LEFTOVER_SEED_DEMO=0`.
 
@@ -23,13 +23,13 @@ uv run uvicorn app.main:app --reload
 
 Open http://127.0.0.1:8000.
 
-To turn on photo recognition, set an Anthropic API key before starting the server:
+To turn on photo recognition, set an OpenAI API key before starting the server:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...
 ```
 
-To show it on phones in the same Wi-Fi network, start with `--host 0.0.0.0` and open `http://<your-laptop-ip>:8000`. On a phone, the photo field opens the camera.
+The browser asks for camera permission the first time. Browsers only allow the live camera on `localhost` or HTTPS, so open the app on the laptop at `http://localhost:8000`. Other devices on the network (`--host 0.0.0.0`, then `http://<your-laptop-ip>:8000`) can still use the "Or upload a photo" field, which opens the camera on a phone.
 
 ### Simulate a bin from the terminal
 
@@ -45,7 +45,7 @@ uv run python scripts/simulate_bin.py --bin NS-01 --stall cr --photo plate.jpg
 
 ```bash
 docker build -t leftover-scale .
-docker run -p 8000:8000 -v leftover-data:/data -e ANTHROPIC_API_KEY leftover-scale
+docker run -p 8000:8000 -v leftover-data:/data -e OPENAI_API_KEY leftover-scale
 ```
 
 ### Tests
@@ -77,8 +77,9 @@ Interactive API docs: http://127.0.0.1:8000/docs.
 |---|---|---|
 | `LEFTOVER_DATA_DIR` | `./data` | Database and photo storage |
 | `LEFTOVER_DATABASE_URL` | SQLite in the data dir | Any SQLAlchemy URL |
-| `LEFTOVER_CLASSIFIER` | `auto` | `auto` uses Claude when a photo is attached; `off` never calls Claude |
-| `LEFTOVER_CLAUDE_MODEL` | `claude-opus-5-5` | Model for dish recognition |
+| `OPENAI_API_KEY` | none | Turns on photo recognition |
+| `LEFTOVER_CLASSIFIER` | `auto` | `auto` uses OpenAI when a photo is attached and a key is set; `off` never calls OpenAI |
+| `LEFTOVER_VISION_MODEL` | `gpt-5.4-mini` | OpenAI model for dish recognition |
 | `LEFTOVER_SEED_DEMO` | `1` | Add 14 days of demo history to an empty database |
 
 ## Limitations

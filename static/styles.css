@@ -178,11 +178,6 @@ td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
 .tank-stats { display: grid; gap: 6px; }
 .tank-stats .v { font-family: var(--font-display); font-size: 1.8rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 
-/* Proposal */
-.prop { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
-.prop .panel ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
-.prop .panel.wide { grid-column: 1 / -1; }
-
 .toast {
   position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
   background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 8px; font-size: 0.88rem; font-weight: 600;
@@ -190,7 +185,7 @@ td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
 }
 
 @media (max-width: 860px) {
-  .bin-grid, .two, .prop { grid-template-columns: minmax(0, 1fr); }
+  .bin-grid, .two { grid-template-columns: minmax(0, 1fr); }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .flow { grid-template-columns: minmax(0, 1fr); }
 }
@@ -207,7 +202,7 @@ input[type="number"], input[type="date"], input[type="file"] {
 }
 .inline { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
 .hint { font-size: 0.78rem; color: var(--muted); }
-.cam img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cam video, .cam img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .error { color: var(--waste); font-size: 0.86rem; font-weight: 600; }
 .bins { display: grid; gap: 16px; }
 .conn { font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); }
@@ -215,3 +210,5 @@ input[type="number"], input[type="date"], input[type="file"] {
 [hidden] { display: none !important; }
 body { margin: 0; }
 img { max-width: 100%; }
+.field, .inline > *, form.controls > * { min-width: 0; }
+select { max-width: 100%; text-overflow: ellipsis; }

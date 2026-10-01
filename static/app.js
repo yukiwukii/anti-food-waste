@@ -33,7 +33,7 @@
   function currentBin() { return currentLocation().bins[0]; }
 
   // ---------- Tabs ----------
-  var tabs = ["bin", "insights", "compost", "proposal"];
+  var tabs = ["bin", "insights", "compost"];
   function showTab(name) {
     state.tab = name;
     tabs.forEach(function (t) {
@@ -142,7 +142,7 @@
     var body = $("log-body"); body.innerHTML = "";
     drops.slice(0, 12).forEach(function (d) {
       var t = new Date(d.created_at);
-      var by = d.classified_by === "claude" ? "Claude " + Math.round(d.confidence * 100) + "%" : d.classified_by === "device" ? "Device label" : "–";
+      var by = d.classified_by === "openai" ? "OpenAI " + Math.round(d.confidence * 100) + "%" : d.classified_by === "device" ? "Device label" : "–";
       var tr = document.createElement("tr");
       tr.innerHTML = "<td class='num'>" + t.toLocaleTimeString("en-SG", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + "</td>" +
         "<td>" + esc(state.stalls[d.stall_id].name) + "</td><td>" + esc(d.dish || "Unidentified") + "</td>" +
@@ -164,15 +164,95 @@
     return api("/api/bins/" + currentBin().id + "/drops", { method: "POST", body: fd });
   }
 
+  // ---------- Live camera ----------
+  var cam = { stream: null, freezeTimer: null };
+
+  function cameraHint(msg, bad) {
+    var h = $("camera-hint"); h.textContent = msg; h.classList.toggle("error", !!bad);
+  }
+
+  function listCameras(activeId) {
+    return navigator.mediaDevices.enumerateDevices().then(function (devices) {
+      var sel = $("sel-camera"); sel.innerHTML = "<option value=''>Camera off</option>";
+      devices.filter(function (d) { return d.kind === "videoinput"; }).forEach(function (d, i) {
+        var o = document.createElement("option");
+        o.value = d.deviceId; o.textContent = d.label || "Camera " + (i + 1);
+        sel.appendChild(o);
+      });
+      sel.value = activeId || "";
+    });
+  }
+
+  function stopCamera() {
+    if (cam.stream) cam.stream.getTracks().forEach(function (t) { t.stop(); });
+    cam.stream = null;
+    $("cam-video").hidden = true;
+    $("btn-camera").textContent = "Turn on camera";
+    $("sel-camera").value = "";
+    cameraHint("Camera is off. Weigh-ins are saved without a photo unless you upload one.");
+  }
+
+  function startCamera(deviceId) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      cameraHint("This browser blocks the camera on this address. Open the app at http://localhost:8000 on the laptop, or use Upload a photo.", true);
+      return Promise.resolve();
+    }
+    if (cam.stream) cam.stream.getTracks().forEach(function (t) { t.stop(); });
+    var video = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "environment" };
+    return navigator.mediaDevices.getUserMedia({ video: video, audio: false }).then(function (stream) {
+      cam.stream = stream;
+      var v = $("cam-video"); v.srcObject = stream; v.hidden = false;
+      $("cam-photo").hidden = true;
+      $("btn-camera").textContent = "Turn off camera";
+      $("cam-dish").textContent = "Camera live"; $("cam-conf").textContent = "–";
+      cameraHint("Camera on. Each weigh-in takes a photo for dish recognition.");
+      var track = stream.getVideoTracks()[0];
+      return listCameras(track.getSettings().deviceId);
+    }).catch(function (e) {
+      cam.stream = null;
+      var msg = e.name === "NotAllowedError" ? "Camera permission was denied. Allow it in the browser's address bar, then press Turn on camera."
+        : e.name === "NotFoundError" ? "No camera found. Plug one in or use Upload a photo."
+        : e.name === "NotReadableError" ? "The camera is in use by another app. Close it and try again."
+        : "Could not start the camera: " + e.message;
+      cameraHint(msg, true);
+    });
+  }
+
+  function captureFrame() {
+    var v = $("cam-video");
+    if (!cam.stream || !v.videoWidth) return Promise.resolve(null);
+    var scale = Math.min(1, 1024 / v.videoWidth);
+    var c = document.createElement("canvas");
+    c.width = Math.round(v.videoWidth * scale); c.height = Math.round(v.videoHeight * scale);
+    c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+    return new Promise(function (resolve) {
+      c.toBlob(function (blob) {
+        resolve(blob ? new File([blob], "bin-camera.jpg", { type: "image/jpeg" }) : null);
+      }, "image/jpeg", 0.85);
+    });
+  }
+
+  $("btn-camera").addEventListener("click", function () { if (cam.stream) stopCamera(); else startCamera(); });
+  $("sel-camera").addEventListener("change", function () {
+    if ($("sel-camera").value) startCamera($("sel-camera").value); else stopCamera();
+  });
+
   function showResult(res, photo) {
     var d = res.drop;
     var stall = state.stalls[d.stall_id];
     $("cam-dish").textContent = (d.dish || "Unidentified") + " · " + stall.name;
-    $("cam-conf").textContent = d.classified_by === "claude" ? Math.round(d.confidence * 100) + "% · Claude"
+    $("cam-conf").textContent = d.classified_by === "openai" ? Math.round(d.confidence * 100) + "% · OpenAI"
       : d.classified_by === "device" ? "Device label" : photo ? "Not identified" : "No photo";
     var img = $("cam-photo");
-    if (d.image_url) { img.src = d.image_url; img.hidden = false; }
-    else { img.hidden = true; drawCam(0, { kg: d.weight_kg }); }
+    clearTimeout(cam.freezeTimer);
+    if (d.image_url) {
+      img.src = d.image_url; img.hidden = false;
+      // Hold the captured frame briefly, then go back to the live feed.
+      if (cam.stream) cam.freezeTimer = setTimeout(function () { img.hidden = true; }, 3000);
+    } else {
+      img.hidden = true;
+      if (!cam.stream) drawCam(0, { kg: d.weight_kg });
+    }
   }
 
   function setBusy(b) {
@@ -189,19 +269,29 @@
       err.textContent = "Enter a weight between 0.001 and 25 kg, or press Read scale.";
       err.hidden = false; $("in-weight").focus(); return;
     }
-    var photo = $("in-photo").files[0] || null;
+    var upload = $("in-photo").files[0] || null;
+    var photo = null;
     setBusy(true);
-    $("cam").classList.add("scanning");
-    $("unit-status").textContent = photo ? "Identifying" : "Weighing";
-    $("cam-dish").textContent = photo ? "Identifying…" : "Weighing…";
-    $("cam-conf").textContent = "–";
-    $("lcd-weight").textContent = "0.000";
-    postDrop($("sel-stall").value, selectedSource(), weight, $("sel-dish").value, photo)
+    (upload ? Promise.resolve(upload) : captureFrame())
+      .then(function (p) {
+        photo = p;
+        $("cam").classList.add("scanning");
+        $("unit-status").textContent = photo ? "Identifying" : "Weighing";
+        $("cam-dish").textContent = photo ? "Identifying…" : "Weighing…";
+        $("cam-conf").textContent = "–";
+        $("lcd-weight").textContent = "0.000";
+        return postDrop($("sel-stall").value, selectedSource(), weight, $("sel-dish").value, photo);
+      })
       .then(function (res) {
         $("cam").classList.remove("scanning");
         showResult(res, photo);
         $("unit-status").textContent = "Saved";
         $("in-weight").value = ""; $("in-photo").value = "";
+        if (res.recognition_error) {
+          $("cam-conf").textContent = "Not identified";
+          err.textContent = "Weigh-in saved, but the dish was not identified. " + res.recognition_error;
+          err.hidden = false;
+        }
         return animateNumber($("lcd-weight"), res.drop.weight_kg, 3, 700);
       })
       .then(loadBin)
@@ -367,8 +457,9 @@
     state.locations = r[1];
     state.locations.forEach(function (l) { l.stalls.forEach(function (s) { state.stalls[s.id] = s; }); });
     state.insightStall = Object.keys(state.stalls)[0];
-    $("conn").textContent = "Connected · " + (r[0].claude_ready ? "Claude photo recognition on" : "photo recognition off (no Anthropic API key)");
+    $("conn").textContent = "Connected · " + (r[0].vision_ready ? "OpenAI photo recognition on" : "photo recognition off (set OPENAI_API_KEY)");
     fillLocations(); fillStalls(); renderChips();
+    startCamera();
     var start = location.hash.slice(1);
     showTab(tabs.indexOf(start) >= 0 ? start : "bin");
   }).catch(function () {

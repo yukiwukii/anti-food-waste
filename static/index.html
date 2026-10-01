@@ -23,20 +23,20 @@
     <button role="tab" id="tab-bin" aria-controls="view-bin" aria-selected="true">Live bin</button>
     <button role="tab" id="tab-insights" aria-controls="view-insights" aria-selected="false">Vendor insights</button>
     <button role="tab" id="tab-compost" aria-controls="view-compost" aria-selected="false">Compost</button>
-    <button role="tab" id="tab-proposal" aria-controls="view-proposal" aria-selected="false">Proposal</button>
   </nav>
 
   <!-- LIVE BIN -->
   <section class="view" id="view-bin" role="tabpanel" aria-labelledby="tab-bin">
     <div class="view-head">
       <h2>Weigh food into the bin</h2>
-      <p class="muted">Each weigh-in is saved to the database. Add a photo and Claude identifies the dish from the stall's menu.</p>
+      <p class="muted">Each weigh-in is saved to the database. The bin camera takes a photo of each item and OpenAI identifies the dish from the stall's menu.</p>
     </div>
     <div class="bin-grid">
       <div class="unit" aria-live="polite">
         <div class="unit-head"><span id="unit-id">Bin</span><span id="unit-status">Ready</span></div>
         <div class="cam" id="cam">
           <canvas id="cam-canvas" width="640" height="400" aria-label="Bin camera view"></canvas>
+          <video id="cam-video" autoplay playsinline muted hidden></video>
           <img id="cam-photo" alt="Last photo taken by the bin camera" hidden>
           <div class="scanline"></div>
           <div class="rec">CAM 1</div>
@@ -82,7 +82,15 @@
           <span class="hint">No scale attached? Read scale fills in a typical weight for the selected source.</span>
         </div>
         <div class="field">
-          <label for="in-photo">Camera photo (optional)</label>
+          <label for="sel-camera">Bin camera</label>
+          <div class="inline">
+            <select id="sel-camera"><option value="">Camera off</option></select>
+            <button class="btn ghost" type="button" id="btn-camera">Turn on camera</button>
+          </div>
+          <span class="hint" id="camera-hint">Turn on the camera and each weigh-in takes a photo for dish recognition.</span>
+        </div>
+        <div class="field">
+          <label for="in-photo">Or upload a photo (optional)</label>
           <input type="file" id="in-photo" accept="image/jpeg,image/png,image/webp,image/gif" capture="environment">
         </div>
         <div class="field">
@@ -173,49 +181,6 @@
             <tbody id="transfer-body"></tbody>
           </table>
         </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- PROPOSAL -->
-  <section class="view" id="view-proposal" role="tabpanel" aria-labelledby="tab-proposal" hidden>
-    <div class="view-head">
-      <h2>The proposal</h2>
-      <p class="muted">Why we built this, and what we expect to happen.</p>
-    </div>
-    <div class="prop">
-      <div class="panel">
-        <span class="label">Problem</span>
-        <h3>Food is left over at the end of the day</h3>
-        <p>Food-court vendors cook more than they sell, and the surplus is thrown away at closing.</p>
-      </div>
-      <div class="panel">
-        <span class="label">Proposed solution</span>
-        <h3>A food bin with a scale and cameras</h3>
-        <ul>
-          <li>The bin measures food waste by weight and identifies the dish with a camera.</li>
-          <li>The data tells vendors their average daily consumption, so they can cook less surplus.</li>
-          <li>The food waste is then transferred to a compost bin.</li>
-        </ul>
-      </div>
-      <div class="panel">
-        <span class="label">1 · Enforcement and public acceptance</span>
-        <ul>
-          <li>The solution targets vendors, so enforcement and public acceptance are not an issue.</li>
-          <li>Vendors should be open to it, because it saves food preparation costs.</li>
-          <li>Bins in common eating areas such as North Spine and South Spine are convenient for consumers to use.</li>
-        </ul>
-      </div>
-      <div class="panel">
-        <span class="label">2 · Unintended consequences</span>
-        <ul>
-          <li>Vendors have additional work if they use the bin. We think the long-term savings are worth it.</li>
-          <li>Data is incomplete because some customers take their food away. Some data is still better than no data.</li>
-        </ul>
-      </div>
-      <div class="panel wide">
-        <span class="label">3 · Root cause</span>
-        <p>Vendors find it hard to estimate daily food consumption because they do not have enough data. A food-waste bin that collects this data addresses the cause directly.</p>
       </div>
     </div>
   </section>
