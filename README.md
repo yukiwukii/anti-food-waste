@@ -23,11 +23,13 @@ uv run uvicorn app.main:app --reload
 
 Open http://127.0.0.1:8000.
 
-To turn on photo recognition, set an OpenAI API key before starting the server:
+To turn on photo recognition, put your OpenAI API key in a `.env` file in the project folder (it is git-ignored):
 
-```bash
-export OPENAI_API_KEY=sk-...
 ```
+OPENAI_API_KEY=sk-...
+```
+
+The `.env` value overrides an `OPENAI_API_KEY` already exported in your shell. Restart the server after changing it.
 
 The browser asks for camera permission the first time. Browsers only allow the live camera on `localhost` or HTTPS, so open the app on the laptop at `http://localhost:8000`. Other devices on the network (`--host 0.0.0.0`, then `http://<your-laptop-ip>:8000`) can still use the "Or upload a photo" field, which opens the camera on a phone.
 
