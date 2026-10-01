@@ -148,6 +148,8 @@ async def create_drop(
         dish=result.dish,
         confidence=result.confidence,
         classified_by=result.classified_by,
+        is_waste=result.is_waste,
+        waste_note=result.waste_note,
         image_file=image_file,
     )
     session.add(drop)
@@ -260,6 +262,8 @@ def stall_insights(stall_id: str, session: SessionDep, days: int = Query(14, ge=
     unsold_kg: dict[date, float] = {}
     plate_kg: dict[date, float] = {}
     for d in drops:
+        if not d.is_waste:
+            continue  # empty plates, bones, broth: in the bin, but not food waste
         bucket = unsold_kg if d.source == "vendor" else plate_kg
         bucket[d.created_at.date()] = bucket.get(d.created_at.date(), 0.0) + d.weight_kg
 
@@ -279,6 +283,7 @@ def stall_insights(stall_id: str, session: SessionDep, days: int = Query(14, ge=
             "unsold_kg": round(unsold_kg.get(today, 0.0), 3),
             "unsold_portions": round(unsold_kg.get(today, 0.0) * 1000 / stall.portion_g),
             "drops": sum(1 for d in drops if d.created_at.date() == today),
+            "not_waste_drops": sum(1 for d in drops if d.created_at.date() == today and not d.is_waste),
         },
     }
 

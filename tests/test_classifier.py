@@ -23,13 +23,21 @@ def use_fake(monkeypatch, payload):
 
 
 def test_photo_is_sent_to_openai_with_menu_labels(monkeypatch):
-    fake = use_fake(monkeypatch, {"dish": "Prata", "confidence": 0.91})
+    fake = use_fake(monkeypatch, {"observation": "Half a prata.", "is_food_waste": True, "dish": "Prata", "confidence": 0.91})
     result = classifier.classify(b"jpeg-bytes", "image/jpeg", ["Briyani", "Prata"], device_label="Briyani")
     assert (result.dish, result.confidence, result.classified_by) == ("Prata", 0.91, "openai")
+    assert result.is_waste
     call = fake.calls[0]
     image = call["input"][0]["content"][1]
     assert image["image_url"].startswith("data:image/jpeg;base64,")
     assert call["text"]["format"]["schema"]["properties"]["dish"]["enum"] == ["Briyani", "Prata", "other"]
+
+
+def test_bones_only_is_not_waste(monkeypatch):
+    use_fake(monkeypatch, {"observation": "Only chicken bones.", "is_food_waste": False, "dish": "Roasted chicken rice", "confidence": 0.7})
+    result = classifier.classify(b"x", "image/jpeg", ["Roasted chicken rice"])
+    assert not result.is_waste
+    assert result.waste_note == "Only chicken bones."
 
 
 def test_openai_failure_falls_back_to_device_label(monkeypatch):
@@ -42,6 +50,7 @@ def test_openai_failure_falls_back_to_device_label(monkeypatch):
     result = classifier.classify(b"x", "image/jpeg", ["Prata"], device_label="Prata")
     assert result.classified_by == "device"
     assert "network down" in result.error
+    assert result.is_waste  # unknown counts as waste
 
 
 def test_no_api_key_skips_openai(monkeypatch):

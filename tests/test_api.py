@@ -83,3 +83,27 @@ def test_compost_summary_counts_seeded_transfers(client):
     c = client.get("/api/compost").json()
     assert c["transfers"] >= 28  # 14 days x 2 bins
     assert c["diverted_kg"] > 0
+
+
+def test_not_waste_drop_is_left_out_of_insights(client, monkeypatch):
+    from app import main
+    from app.classifier import Classification
+
+    monkeypatch.setattr(
+        main, "classify",
+        lambda *a, **k: Classification("Ramen", 0.8, "openai", is_waste=False, waste_note="Only broth."),
+    )
+    before = client.get("/api/stalls/jp/insights").json()["today"]
+    r = client.post(
+        "/api/bins/SS-01/drops",
+        data={"stall_id": "jp", "source": "vendor", "weight_kg": "2.0"},
+        files={"image": ("bowl.png", b"\x89PNG fake", "image/png")},
+    )
+    assert r.status_code == 201
+    assert r.json()["drop"]["is_waste"] is False
+    after = client.get("/api/stalls/jp/insights").json()["today"]
+    assert after["unsold_kg"] == before["unsold_kg"]
+    assert after["not_waste_drops"] == before["not_waste_drops"] + 1
+    # The broth is still physically in the bin.
+    assert client.get("/api/bins/SS-01").json()["load_kg"] >= 2.0
+    client.post("/api/bins/SS-01/transfers")

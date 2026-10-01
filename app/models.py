@@ -39,6 +39,10 @@ class Drop(SQLModel, table=True):
     dish: Optional[str] = None
     confidence: Optional[float] = None
     classified_by: str = "none"  # "openai", "device", "seed", "none"
+    # False when the camera saw nothing edible (empty plate, bones, broth). The weight still
+    # sits in the bin, but it is left out of food-waste figures.
+    is_waste: bool = True
+    waste_note: Optional[str] = None
     image_file: Optional[str] = None
     created_at: NaiveDatetime = Field(default_factory=now, index=True)
     transfer_id: Optional[int] = Field(default=None, foreign_key="composttransfer.id", index=True)

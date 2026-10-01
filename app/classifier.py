@@ -40,6 +40,8 @@ class Classification:
     dish: Optional[str]
     confidence: Optional[float]
     classified_by: str
+    is_waste: bool = True  # unknown counts as waste, so data is never silently dropped
+    waste_note: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -83,18 +85,28 @@ def _classify_with_openai(image: bytes, media_type: str, menu: list[str]) -> Cla
     schema = {
         "type": "object",
         "properties": {
+            "observation": {"type": "string"},
+            "is_food_waste": {"type": "boolean"},
             "dish": {"type": "string", "enum": labels},
             "confidence": {"type": "number"},
         },
-        "required": ["dish", "confidence"],
+        "required": ["observation", "is_food_waste", "dish", "confidence"],
         "additionalProperties": False,
     }
     prompt = (
         "This photo is from a camera mounted above a food-waste bin at a university food court. "
-        "Identify which dish the leftover food comes from. "
-        f"Choose exactly one label from this stall's menu: {', '.join(menu)}. "
-        f'Use "{OTHER}" if the food does not match any of them or the photo shows no food. '
-        "Set confidence between 0 and 1."
+        "Answer two questions about what is being thrown away.\n\n"
+        "1. Is there food waste? Food waste means edible food left uneaten, such as rice, noodles, "
+        "meat, fish, egg, tofu, vegetables or bread. It is NOT food waste if the photo shows only "
+        "inedible or non-food items: an empty or scraped plate, bowl or container; bones, shells or "
+        "seeds; leftover soup, broth, gravy or sauce with no solid food in it; sauce smears or a few "
+        "stray grains of rice; napkins, cutlery or packaging. If any real portion of edible food is "
+        "present, it is food waste.\n\n"
+        "2. Which dish does it come from? Choose exactly one label from this stall's menu: "
+        f"{', '.join(menu)}. "
+        f'Use "{OTHER}" if it does not match any of them or the photo shows no food.\n\n'
+        "In observation, describe in one short sentence what you see. "
+        "Set confidence between 0 and 1 for the dish label."
     )
     data_url = f"data:{media_type};base64,{base64.b64encode(image).decode('ascii')}"
     response = _get_client().responses.create(
@@ -113,4 +125,10 @@ def _classify_with_openai(image: bytes, media_type: str, menu: list[str]) -> Cla
     data = json.loads(response.output_text)
     dish = data["dish"] if data["dish"] in labels else OTHER
     confidence = max(0.0, min(1.0, float(data["confidence"])))
-    return Classification(dish=dish, confidence=round(confidence, 2), classified_by="openai")
+    return Classification(
+        dish=dish,
+        confidence=round(confidence, 2),
+        classified_by="openai",
+        is_waste=bool(data["is_food_waste"]),
+        waste_note=str(data["observation"])[:200],
+    )

@@ -146,8 +146,9 @@
       var tr = document.createElement("tr");
       tr.innerHTML = "<td class='num'>" + t.toLocaleTimeString("en-SG", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + "</td>" +
         "<td>" + esc(state.stalls[d.stall_id].name) + "</td><td>" + esc(d.dish || "Unidentified") + "</td>" +
-        "<td><span class='pill " + d.source + "'>" + (d.source === "plate" ? "Customer" : "Vendor") + "</span></td>" +
-        "<td>" + by + "</td><td class='r'>" + fmt(d.weight_kg, 3) + "</td>";
+        "<td><span class='pill " + d.source + "'>" + (d.source === "plate" ? "Customer" : "Vendor") + "</span>" +
+        (d.is_waste ? "" : " <span class='pill none' title='" + esc(d.waste_note) + "'>Not waste</span>") + "</td>" +
+        "<td>" + by + "</td><td class='r" + (d.is_waste ? "" : " struck") + "'>" + fmt(d.weight_kg, 3) + "</td>";
       body.appendChild(tr);
     });
     $("log-count").textContent = drops.length;
@@ -240,7 +241,9 @@
   function showResult(res, photo) {
     var d = res.drop;
     var stall = state.stalls[d.stall_id];
-    $("cam-dish").textContent = (d.dish || "Unidentified") + " · " + stall.name;
+    $("cam-dish").textContent = d.is_waste
+      ? (d.dish || "Unidentified") + " · " + stall.name
+      : "No food waste" + (d.waste_note ? " · " + d.waste_note : "");
     $("cam-conf").textContent = d.classified_by === "openai" ? Math.round(d.confidence * 100) + "% · OpenAI"
       : d.classified_by === "device" ? "Device label" : photo ? "Not identified" : "No photo";
     var img = $("cam-photo");
@@ -285,7 +288,7 @@
       .then(function (res) {
         $("cam").classList.remove("scanning");
         showResult(res, photo);
-        $("unit-status").textContent = "Saved";
+        $("unit-status").textContent = res.drop.is_waste ? "Saved" : "Saved · not counted";
         $("in-weight").value = ""; $("in-photo").value = "";
         if (res.recognition_error) {
           $("cam-conf").textContent = "Not identified";
@@ -397,6 +400,7 @@
       $("in-prep").value = t.prepared == null ? "" : t.prepared;
       $("today").innerHTML = '<table><tbody>' +
         '<tr><td>Items weighed</td><td class="r">' + t.drops + '</td></tr>' +
+        '<tr><td>Not counted (no food waste in photo)</td><td class="r">' + t.not_waste_drops + '</td></tr>' +
         '<tr><td>Customer plate waste</td><td class="r">' + fmt(t.plate_kg, 2) + ' kg</td></tr>' +
         '<tr><td>Vendor unsold food</td><td class="r">' + fmt(t.unsold_kg, 2) + ' kg</td></tr>' +
         '<tr><td>Unsold portions (' + s.portion_g + ' g each)</td><td class="r">' + t.unsold_portions + '</td></tr>' +
