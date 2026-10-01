@@ -1,6 +1,5 @@
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import asdict
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated, Literal, Optional
@@ -13,11 +12,12 @@ from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from . import config
-from .classifier import classify, vision_ready
+from .classifier import MenuScanError, classify, scan_menu, vision_ready
 from .db import engine, get_session, init_db
-from .insights import build_day, suggest
-from .models import Bin, CompostTransfer, Drop, Location, PrepLog, Stall
-from .seed import ensure_reference_data, refresh_demo_history, reset_demo_history
+from .insights import cook_less, serve_less, totals
+from .menu import UNIDENTIFIED, MenuIn, get_menu, replace_menu
+from .models import Bin, CompostTransfer, Drop, DropIngredient, Location, Stall
+from .seed import backfill_drop_ingredients, ensure_reference_data, refresh_demo_history, reset_demo_history
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
@@ -30,6 +30,7 @@ async def lifespan(_app: FastAPI):
         ensure_reference_data(session)
         if config.SEED_DEMO:
             refresh_demo_history(session)
+        backfill_drop_ingredients(session)
     yield
 
 
@@ -59,6 +60,20 @@ def _day_bounds(day: date) -> tuple[datetime, datetime]:
 
 
 DETAIL_FIELDS = {"model_prompt", "model_reasoning", "model_output"}
+
+
+async def _read_image(image: UploadFile) -> tuple[bytes, str]:
+    if image.content_type not in IMAGE_TYPES:
+        raise HTTPException(415, "Photo must be JPEG, PNG, WebP or GIF")
+    data = await image.read()
+    if len(data) > config.MAX_IMAGE_BYTES:
+        raise HTTPException(413, "Photo is larger than 5 MB")
+    return data, image.content_type
+
+
+def _drop_ingredients(session: Session, drop_id: int) -> list[dict]:
+    rows = session.exec(select(DropIngredient).where(DropIngredient.drop_id == drop_id).order_by(col(DropIngredient.share).desc()))
+    return [{"ingredient": r.ingredient, "share": r.share, "waste_kg": r.waste_kg} for r in rows]
 
 
 def _drop_out(d: Drop, detail: bool = False) -> dict:
@@ -134,16 +149,11 @@ async def create_drop(
     media_type = None
     image_file = None
     if image is not None and image.filename:
-        media_type = image.content_type
-        if media_type not in IMAGE_TYPES:
-            raise HTTPException(415, "Photo must be JPEG, PNG, WebP or GIF")
-        image_bytes = await image.read()
-        if len(image_bytes) > config.MAX_IMAGE_BYTES:
-            raise HTTPException(413, "Photo is larger than 5 MB")
+        image_bytes, media_type = await _read_image(image)
         image_file = f"{uuid.uuid4().hex}.{media_type.split('/')[1]}"
         (config.IMAGE_DIR / image_file).write_bytes(image_bytes)
 
-    result = classify(image_bytes, media_type, stall.menu, device_label=dish)
+    result = classify(image_bytes, media_type, get_menu(session, stall_id), device_label=dish)
     drop = Drop(
         bin_id=bin_id,
         stall_id=stall_id,
@@ -163,10 +173,15 @@ async def create_drop(
         image_file=image_file,
     )
     session.add(drop)
+    session.flush()
+    if drop.waste_kg:
+        for name, share in result.ingredients:
+            session.add(DropIngredient(drop_id=drop.id, ingredient=name, share=round(share, 4),
+                                       waste_kg=round(drop.waste_kg * share, 4)))
     session.commit()
     session.refresh(drop)
     return {
-        "drop": _drop_out(drop),
+        "drop": {**_drop_out(drop), "ingredients": _drop_ingredients(session, drop.id)},
         "bin_load_kg": round(load + drop.weight_kg, 3),
         "recognition_error": result.error,
     }
@@ -197,6 +212,7 @@ def get_drop(drop_id: int, session: SessionDep):
     d = _get_or_404(session, Drop, drop_id)
     out = _drop_out(d, detail=True)
     out["stall_name"] = session.get(Stall, d.stall_id).name
+    out["ingredients"] = _drop_ingredients(session, d.id)
     return out
 
 
@@ -244,73 +260,104 @@ def compost_summary(session: SessionDep):
     }
 
 
-# ---------- vendor prep and insights ----------
+# ---------- menus ----------
 
-class PrepIn(BaseModel):
-    day: date
-    portions: int = Field(ge=0, le=5000)
-
-
-@app.put("/api/stalls/{stall_id}/prep")
-def set_prep(stall_id: str, body: PrepIn, session: SessionDep):
-    """Vendor records how many portions they cooked that day."""
+@app.get("/api/stalls/{stall_id}/menu")
+def read_menu(stall_id: str, session: SessionDep):
     _get_or_404(session, Stall, stall_id)
-    row = session.exec(select(PrepLog).where(PrepLog.stall_id == stall_id, PrepLog.day == body.day)).first()
-    if row is None:
-        row = PrepLog(stall_id=stall_id, day=body.day, portions=body.portions)
-    else:
-        row.portions = body.portions
-    session.add(row)
-    session.commit()
-    session.refresh(row)
-    return row
+    return get_menu(session, stall_id)
 
+
+@app.put("/api/stalls/{stall_id}/menu")
+def save_menu(stall_id: str, body: MenuIn, session: SessionDep):
+    """Replace the stall's menu after the vendor has reviewed it."""
+    stall = _get_or_404(session, Stall, stall_id)
+    replace_menu(session, stall, body)
+    return get_menu(session, stall_id)
+
+
+@app.post("/api/stalls/{stall_id}/menu/scan")
+async def scan_menu_photo(stall_id: str, session: SessionDep, image: Annotated[UploadFile, File()]):
+    """Read a photo of the stall's menu into a draft. Nothing is saved until the vendor saves the draft."""
+    _get_or_404(session, Stall, stall_id)
+    data, media_type = await _read_image(image)
+    try:
+        return scan_menu(data, media_type)
+    except MenuScanError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+# ---------- vendor insights ----------
 
 @app.get("/api/stalls/{stall_id}/insights")
 def stall_insights(stall_id: str, session: SessionDep, days: int = Query(14, ge=3, le=90)):
     stall = _get_or_404(session, Stall, stall_id)
+    menu = get_menu(session, stall_id)
+    ingredients = {i["name"]: i for i in menu["ingredients"]}
     today = config.now().date()
-    start = today - timedelta(days=days)
-    preps = {
-        p.day: p.portions
-        for p in session.exec(select(PrepLog).where(PrepLog.stall_id == stall_id, PrepLog.day >= start, PrepLog.day <= today))
-    }
-    drops = session.exec(
-        select(Drop).where(Drop.stall_id == stall_id, Drop.created_at >= datetime.combine(start, time.min))
+    since = datetime.combine(today - timedelta(days=days), time.min)
+    drops = session.exec(select(Drop).where(Drop.stall_id == stall_id, Drop.created_at >= since)).all()
+    parts = session.exec(
+        select(DropIngredient, Drop)
+        .join(Drop, col(Drop.id) == DropIngredient.drop_id)
+        .where(Drop.stall_id == stall_id, Drop.created_at >= since)
     ).all()
-    unsold_kg: dict[date, float] = {}
-    plate_kg: dict[date, float] = {}
-    for d in drops:
-        # Only the edible share counts; bones, broth and empty plates add weight but no food waste.
-        counted = d.waste_kg if d.waste_kg is not None else (d.weight_kg if d.is_waste else 0.0)
-        bucket = unsold_kg if d.source == "vendor" else plate_kg
-        bucket[d.created_at.date()] = bucket.get(d.created_at.date(), 0.0) + counted
 
-    history = [
-        build_day(day, preps[day], unsold_kg.get(day, 0.0), plate_kg.get(day, 0.0), stall.portion_g)
-        for day in sorted(preps)
-        if day < today
-    ]
-    # Today is still open, so it is charted but left out of the suggestion.
-    today_row = build_day(
-        today, preps.get(today), unsold_kg.get(today, 0.0), plate_kg.get(today, 0.0), stall.portion_g, partial=True
-    )
-    demo_days = {
-        p.day for p in session.exec(select(PrepLog).where(PrepLog.stall_id == stall_id, col(PrepLog.is_demo)))
-    }
+    past_days = sorted({d.created_at.date() for d in drops if d.created_at.date() < today})
+    weekday = lambda day: day < today and day.weekday() < 5  # noqa: E731
+    unsold: dict[str, dict[date, float]] = {}
+    plate_left: dict[tuple[str, str], float] = {}
+    daily: dict[date, dict] = {}
+    for part, d in parts:
+        day = d.created_at.date()
+        row = daily.setdefault(day, {"unsold": {}, "plate_kg": 0.0})
+        if d.source == "vendor":
+            unsold.setdefault(part.ingredient, {})
+            unsold[part.ingredient][day] = unsold[part.ingredient].get(day, 0.0) + part.waste_kg
+            row["unsold"][part.ingredient] = row["unsold"].get(part.ingredient, 0.0) + part.waste_kg
+        else:
+            row["plate_kg"] += part.waste_kg
+            if weekday(day) and d.dish:
+                plate_left[(d.dish, part.ingredient)] = plate_left.get((d.dish, part.ingredient), 0.0) + part.waste_kg
+    plates: dict[str, int] = {}
+    for d in drops:
+        if d.source == "plate" and d.dish and weekday(d.created_at.date()):
+            plates[d.dish] = plates.get(d.dish, 0) + 1
+
+    # Colours follow the ingredient, so keep a fixed order: menu order, then anything else seen.
+    order = list(ingredients) + sorted({p.ingredient for p, _ in parts} - set(ingredients) - {UNIDENTIFIED})
+    if any(p.ingredient == UNIDENTIFIED for p, _ in parts):
+        order.append(UNIDENTIFIED)
+
+    def day_row(day: date, partial: bool) -> dict:
+        row = daily.get(day, {"unsold": {}, "plate_kg": 0.0})
+        on_day = [d for d in drops if d.created_at.date() == day]
+        return {
+            "day": day,
+            "partial": partial,
+            "weekend": day.weekday() >= 5,
+            "demo": bool(on_day) and all(d.classified_by == "seed" for d in on_day),
+            "unsold": {k: round(v, 3) for k, v in row["unsold"].items()},
+            "unsold_kg": round(sum(row["unsold"].values()), 3),
+            "plate_kg": round(row["plate_kg"], 3),
+        }
+
+    cook = cook_less(past_days, unsold, ingredients)
+    serve = serve_less(past_days, plates, plate_left, menu, ingredients)
+    today_drops = [d for d in drops if d.created_at.date() == today]
     return {
         "stall": stall,
-        "history": [{**asdict(r), "demo": r.day in demo_days} for r in history]
-        + [{**asdict(today_row), "demo": False}],
-        "suggestion": suggest(history, stall.portion_g, stall.cost_per_portion),
+        "menu_is_example": menu["is_example"],
+        "ingredient_order": order,
+        "days": [day_row(d, False) for d in past_days] + [day_row(today, True)],
+        "weekdays_used": sum(1 for d in past_days if d.weekday() < 5),
+        "cook_less": cook,
+        "serve_less": serve,
+        "totals": totals(cook, serve),
         "today": {
-            "day": today,
-            "prepared": preps.get(today),
-            "plate_kg": round(plate_kg.get(today, 0.0), 3),
-            "unsold_kg": round(unsold_kg.get(today, 0.0), 3),
-            "unsold_portions": round(unsold_kg.get(today, 0.0) * 1000 / stall.portion_g),
-            "drops": sum(1 for d in drops if d.created_at.date() == today),
-            "not_waste_drops": sum(1 for d in drops if d.created_at.date() == today and not d.is_waste),
+            **day_row(today, True),
+            "drops": len(today_drops),
+            "not_waste_drops": sum(1 for d in today_drops if not d.is_waste),
         },
     }
 

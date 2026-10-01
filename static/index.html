@@ -120,8 +120,8 @@
   <!-- INSIGHTS -->
   <section class="view" id="view-insights" role="tabpanel" aria-labelledby="tab-insights" hidden>
     <div class="view-head">
-      <h2>What each vendor should cook</h2>
-      <p class="muted">Portions cooked come from the vendor. Unsold food weighed at closing gives unsold portions, so portions sold = cooked − unsold.</p>
+      <h2>What each vendor should cook and serve</h2>
+      <p class="muted">The bin camera splits every weigh-in by ingredient. Food the vendor throws away at closing shows what to cook less of. Food customers leave on their plates shows which servings are too big. Bin weights are cooked weights; raw weights use each ingredient's cooked-to-raw ratio.</p>
     </div>
     <div class="insights-bar">
       <div class="chips" id="stall-chips" role="group" aria-label="Choose a stall"></div>
@@ -130,31 +130,60 @@
         <button class="btn ghost" type="button" id="btn-reset-demo">Reset demo data</button>
       </div>
     </div>
+    <p class="note" id="example-menu-note" hidden>This stall still uses an example menu with made-up recipes. Read the real menu from a photo in the Menu section below.</p>
     <div class="panel">
       <div class="kpis" id="kpis"></div>
+      <h3>Food thrown away at closing, by ingredient (cooked kg)</h3>
       <div class="chart-wrap" id="chart"></div>
-      <div class="legend">
-        <span><i style="background:var(--accent)"></i>Portions sold</span>
-        <span><i style="background:var(--waste)"></i>Portions unsold</span>
-        <span><i style="background:transparent;border-top:2px dashed var(--ink);height:0;border-radius:0"></i>Suggested weekday prep</span>
-        <span><i class="today-swatch"></i>Today, still in progress (not used for the suggestion)</span>
-      </div>
+      <div class="legend" id="chart-legend"></div>
       <p class="hint" id="demo-note"></p>
     </div>
-    <div class="two">
-      <div class="rec-box" id="rec"></div>
-      <div class="panel">
-        <h3>Today</h3>
-        <form id="prep-form" class="inline">
-          <div class="field">
-            <label for="in-prep">Portions cooked today</label>
-            <input type="number" id="in-prep" min="0" max="5000" step="1" required>
-          </div>
-          <button class="btn" type="submit">Save</button>
-        </form>
+    <div class="panel">
+      <h3>Cook less</h3>
+      <p class="muted" id="cook-intro"></p>
+      <div class="table-wrap" id="cook-table"></div>
+    </div>
+    <div class="panel">
+        <h3>Serve less</h3>
+        <p class="muted">Average left on each customer plate that reached the bin. Clean plates never reach the bin, so these averages run high; the suggestion only trims 80% of what is left.</p>
+        <div class="table-wrap" id="serve-table"></div>
+    </div>
+    <div class="panel">
+        <h3>Today so far</h3>
         <div id="today"></div>
-        <p class="note">Takeaway meals never reach the bin, so customer plate waste is only partly captured. Vendor end-of-day leftovers are captured in full, and those drive the prep suggestion.</p>
+        <p class="note">Takeaway meals never reach the bin, so customer plate waste is only partly captured. Vendor end-of-day leftovers are captured in full.</p>
+    </div>
+    <div class="panel" id="menu-panel">
+      <div class="menu-head">
+        <h3 id="menu-title">Menu</h3>
+        <div class="btn-row">
+          <label class="btn ghost file-btn" for="in-menu-photo">Read menu from photo</label>
+          <input type="file" id="in-menu-photo" accept="image/jpeg,image/png,image/webp,image/gif" capture="environment" class="visually-hidden">
+          <button class="btn ghost" type="button" id="btn-menu-edit">Edit menu</button>
+        </div>
       </div>
+      <p class="hint" id="menu-status" aria-live="polite"></p>
+      <div id="menu-view"></div>
+      <form id="menu-editor" hidden novalidate>
+        <h3>Ingredients</h3>
+        <p class="hint">Cooked ÷ raw: how much heavier or lighter the ingredient gets when cooked. White rice is about 2.5; chicken about 0.75.</p>
+        <div class="table-wrap">
+          <table class="edit-table">
+            <thead><tr><th>Ingredient</th><th class="r">Cooked ÷ raw</th><th class="r">S$ per raw kg</th><th></th></tr></thead>
+            <tbody id="edit-ingredients"></tbody>
+          </table>
+        </div>
+        <button class="btn ghost" type="button" id="btn-add-ingredient">Add ingredient</button>
+        <h3>Menu items</h3>
+        <p class="hint">Cooked grams of each ingredient in one portion.</p>
+        <div id="edit-items"></div>
+        <button class="btn ghost" type="button" id="btn-add-item">Add menu item</button>
+        <p class="error" id="menu-error" hidden></p>
+        <div class="btn-row">
+          <button class="btn" type="submit">Save menu</button>
+          <button class="btn ghost" type="button" id="btn-menu-cancel">Cancel</button>
+        </div>
+      </form>
     </div>
   </section>
 

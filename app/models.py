@@ -72,3 +72,45 @@ class CompostTransfer(SQLModel, table=True):
     weight_kg: float
     created_at: NaiveDatetime = Field(default_factory=now)
     is_demo: bool = False
+
+
+class StallIngredient(SQLModel, table=True):
+    """An ingredient a stall cooks with. Weights in the bin are cooked weights."""
+
+    __table_args__ = (UniqueConstraint("stall_id", "name"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    stall_id: str = Field(foreign_key="stall.id", index=True)
+    name: str
+    cooked_per_raw: float = 1.0  # cooked weight / raw weight, e.g. rice ~2.5, chicken ~0.75
+    cost_per_raw_kg: float = 0.0  # S$
+    is_example: bool = False
+
+
+class MenuItem(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("stall_id", "name"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    stall_id: str = Field(foreign_key="stall.id", index=True)
+    name: str
+    is_example: bool = False
+
+
+class RecipeLine(SQLModel, table=True):
+    """Cooked grams of one ingredient in one portion of a menu item."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    menu_item_id: int = Field(foreign_key="menuitem.id", index=True)
+    ingredient_id: int = Field(foreign_key="stallingredient.id", index=True)
+    grams: float
+
+
+class DropIngredient(SQLModel, table=True):
+    """How a weigh-in's counted food waste splits across ingredients.
+
+    The ingredient name is copied, not linked, so editing a menu never rewrites history.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    drop_id: int = Field(foreign_key="drop.id", index=True)
+    ingredient: str
+    share: float
+    waste_kg: float

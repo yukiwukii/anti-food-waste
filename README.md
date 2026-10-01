@@ -5,14 +5,16 @@ Smart food-waste bins for NTU's North Spine and South Spine food courts. Each bi
 ## What it does
 
 - **Bin API**: the bin posts each weigh-in (stall, customer plate or vendor end-of-day, weight, optional photo) to the server. The server stores it in SQLite and refuses weigh-ins when the bin is full.
-- **Live bin camera**: the Live bin page streams from a webcam. Each weigh-in captures a frame, and OpenAI vision (`gpt-6-luna` by default) decides whether it is food waste, estimates what share of the weight is edible (rice versus bones or broth), and picks the dish from that stall's menu. Only weight × edible share counts as food waste. Select a row in the log to see the photo, the model's reasoning, its raw output and the prompt. If there is no photo, no API key, or the call fails, the full weight counts and the weigh-in is still saved.
-- **Vendor insights**: vendors enter how many portions they cooked each day. Unsold food weighed at closing gives unsold portions, so portions sold = cooked − unsold. The suggested weekday prep is average sales plus half a standard deviation. The page also shows the daily and monthly savings.
+- **Live bin camera**: the Live bin page streams from a webcam. Each weigh-in captures a frame, and OpenAI vision (`gpt-6-luna` by default) decides whether it is food waste, estimates the edible share of the weight (rice versus bones or broth), names the dish from the stall's menu, and splits the edible weight across the stall's ingredients. Select a row in the log to see the photo, the split, the model's reasoning, its raw output and the prompt. If there is no photo, no API key, or the call fails, the full weight counts and is split by the dish's recipe.
+- **Menus**: each stall has ingredients (cooked ÷ raw weight ratio, S$ per raw kg) and menu items (cooked grams of each ingredient per portion). A vendor can photograph their menu and AI drafts the whole thing; the vendor checks the estimates and saves. Every stall starts with an example menu with made-up recipes.
+- **Vendor insights**:
+  - *Cook less*: average weekday leftover of each ingredient at closing, minus a buffer of half a standard deviation, in raw and cooked kg and S$.
+  - *Serve less*: average grams of each ingredient left on customer plates, with a smaller suggested serving.
+  - A chart of food thrown away at closing by ingredient, including today so far. The tab refreshes every 5 seconds.
 - **Compost tracking**: staff record each time a bin is emptied into compost. The page shows the total food diverted from the trash.
 - **Web dashboard** at `/`, with Live bin, Vendor insights, and Compost tabs.
 
-On first start the server adds 14 days of demo history (fixed random seed, marked as demo in the database), so the insights have data to show. The window always ends yesterday: if the server starts on a later day, it moves the demo history forward. The "Reset demo data" button on the Vendor insights tab does the same on demand. Real weigh-ins and portions entered by vendors are never touched. Turn demo data off with `LEFTOVER_SEED_DEMO=0`.
-
-The Vendor insights tab refreshes every 5 seconds while it is open. Today appears as a dashed, unfinished bar and is not used for the prep suggestion until the day is over.
+On first start the server adds 14 days of demo history (fixed random seed, marked as demo in the database), so the insights have data to show. The window always ends yesterday: if the server starts on a later day, it moves the demo history forward. The "Reset demo data" button does the same on demand. Real weigh-ins are never touched. Turn demo data off with `LEFTOVER_SEED_DEMO=0`.
 
 ## Run it
 
@@ -70,8 +72,9 @@ uv run pytest
 | GET | `/api/drops/{id}/image` | Photo for a weigh-in |
 | POST | `/api/bins/{bin_id}/transfers` | Empty the bin into compost |
 | GET | `/api/compost` | Totals, bins, and recent transfers |
-| PUT | `/api/stalls/{stall_id}/prep` | Portions cooked on a day (`{"day": "2026-10-01", "portions": 180}`) |
-| GET | `/api/stalls/{stall_id}/insights` | Daily history including today so far, prep suggestion, and today's figures |
+| GET / PUT | `/api/stalls/{stall_id}/menu` | Read or replace a stall's ingredients and menu items |
+| POST | `/api/stalls/{stall_id}/menu/scan` | Read a menu photo into a draft menu (not saved) |
+| GET | `/api/stalls/{stall_id}/insights` | Daily leftovers by ingredient, cook-less and serve-less advice, and today's figures |
 | POST | `/api/demo/reset` | Regenerate demo history ending yesterday; real data is kept |
 
 Interactive API docs: http://127.0.0.1:8000/docs.
@@ -90,5 +93,6 @@ Interactive API docs: http://127.0.0.1:8000/docs.
 ## Limitations
 
 - Takeaway meals never reach the bin, so customer plate waste is only partly captured. The prep suggestion uses vendor end-of-day leftovers, which are captured in full.
-- Vendors must enter portions cooked each day. Without that, the server cannot work out portions sold.
+- Ingredient splits, edible shares, and menu weights read from photos are model estimates. Vendors should check the menu draft before saving it.
+- Clean plates never reach the bin, so serve-less averages are higher than the true average per customer.
 - There is no login. Run it on a trusted network.

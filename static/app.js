@@ -21,7 +21,9 @@
     return fetch(path, opts).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (body) {
         if (!res.ok) {
-          var msg = typeof body.detail === "string" ? body.detail : "Request failed (" + res.status + ")";
+          var msg = typeof body.detail === "string" ? body.detail
+            : Array.isArray(body.detail) ? body.detail.map(function (d) { return String(d.msg).replace(/^Value error, /, ""); }).join(" ")
+            : "Request failed (" + res.status + ")";
           throw new Error(msg);
         }
         return body;
@@ -40,7 +42,7 @@
       $("tab-" + t).setAttribute("aria-selected", t === name ? "true" : "false");
       $("view-" + t).hidden = t !== name;
     });
-    if (name === "insights") loadInsights();
+    if (name === "insights") { loadInsights(); loadMenu(); }
     if (name === "compost") loadCompost();
     if (name === "bin") loadBin();
     history.replaceState(null, "", "#" + name);
@@ -272,8 +274,14 @@
         factRow("Identified by", by) +
         factRow("Model", d.model ? esc(d.model) : "–") +
         "</dl>";
+      if (d.ingredients && d.ingredients.length) {
+        html += "<h3>Food waste by ingredient</h3><table><tbody>" + d.ingredients.map(function (p) {
+          return "<tr><td>" + esc(p.ingredient) + "</td><td class='r'>" + Math.round(p.share * 100) + "%</td><td class='r'>" + fmt(p.waste_kg, 3) + " kg</td></tr>";
+        }).join("") + "</tbody></table>";
+      }
       if (d.classified_by !== "openai") {
-        html += '<p class="note">No photo was analysed for this weigh-in, so the full weight counts as food waste.</p>';
+        html += '<p class="note">No photo was analysed for this weigh-in, so the full weight counts as food waste' +
+          (d.dish ? ", split by the " + esc(d.dish) + " recipe." : " and the ingredients are unknown.") + '</p>';
       } else {
         html += "<h3>What the model saw</h3><p>" + esc(d.waste_note) + "</p>";
         html += "<h3>Model's reasoning</h3><p class='prewrap'>" + esc(d.model_reasoning) + "</p>";
@@ -389,13 +397,28 @@
   });
 
   // ---------- Insights ----------
+  var SERIES = 6; // categorical slots; more ingredients fold into the grey "other" colour
+
+  function ingColor(order, name) {
+    var i = order.indexOf(name);
+    if (name === "Unidentified" || i < 0 || i >= SERIES) return "var(--s-other)";
+    return "var(--s" + (i + 1) + ")";
+  }
+  function swatch(order, name) {
+    return '<i class="swatch" style="background:' + ingColor(order, name) + '"></i>';
+  }
+  function kg(n, d) { return fmt(n, d == null ? 1 : d) + " kg"; }
+
   function renderChips() {
     var chips = $("stall-chips"); chips.innerHTML = "";
     Object.keys(state.stalls).forEach(function (id) {
       var b = document.createElement("button");
       b.type = "button"; b.textContent = state.stalls[id].name;
       b.setAttribute("aria-pressed", id === state.insightStall ? "true" : "false");
-      b.addEventListener("click", function () { state.insightStall = id; state.prepDirty = false; renderChips(); loadInsights(); });
+      b.addEventListener("click", function () {
+        if (state.menuEditing && !leaveEditor()) return;
+        state.insightStall = id; state.insightsKey = null; renderChips(); loadInsights(); loadMenu();
+      });
       chips.appendChild(b);
     });
   }
@@ -404,51 +427,70 @@
     return '<div class="kpi ' + cls + '"><span class="label">' + label + '</span><span class="v">' + value + '<small>' + unit + '</small></span></div>';
   }
 
-  function renderChart(stall, rows, suggested) {
-    if (!rows.length) { $("chart").innerHTML = '<p class="empty">No days with portions cooked yet.</p>'; return; }
+  function renderChart(stall, days, order) {
     var W = 720, H = 280, L = 44, R = 12, T = 14, B = 40;
-    var max = Math.max.apply(null, rows.map(function (r) { return r.prepared == null ? r.unsold : r.prepared; }).concat([suggested || 0, 10]));
-    var step = max > 400 ? 100 : max > 120 ? 50 : 20, top = Math.ceil(max / step) * step;
+    var max = Math.max.apply(null, days.map(function (d) { return d.unsold_kg; }).concat([1]));
+    var steps = [0.5, 1, 2, 5, 10, 20, 50], step = steps.filter(function (s) { return max / s <= 6; })[0] || 100;
+    var top = Math.ceil(max / step) * step;
     var y = function (v) { return T + (H - T - B) * (1 - v / top); };
-    var bw = (W - L - R) / rows.length;
-    var ink = cssVar("--ink"), muted = cssVar("--muted"), line = cssVar("--line"), acc = cssVar("--accent"), waste = cssVar("--waste");
-    var out = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Portions sold and unsold per day for ' + esc(stall.name) + '">' +
-      '<defs><pattern id="todayHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">' +
-      '<rect width="6" height="6" fill="' + acc + '" opacity="0.35"/><line x1="0" y1="0" x2="0" y2="6" stroke="' + acc + '" stroke-width="3"/></pattern></defs>';
-    for (var v = 0; v <= top; v += step) {
+    var bw = (W - L - R) / days.length;
+    var ink = cssVar("--ink"), muted = cssVar("--muted"), line = cssVar("--line"), surface = cssVar("--surface");
+    var out = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Cooked kilograms thrown away at closing per day for ' + esc(stall.name) + ', split by ingredient">';
+    for (var v = 0; v <= top + 1e-9; v += step) {
       out += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '" stroke="' + line + '"/>';
-      out += '<text x="' + (L - 8) + '" y="' + (y(v) + 4) + '" text-anchor="end" font-size="11" fill="' + muted + '" font-family="JetBrains Mono, monospace">' + v + '</text>';
+      out += '<text x="' + (L - 8) + '" y="' + (y(v) + 4) + '" text-anchor="end" font-size="11" fill="' + muted + '" font-family="JetBrains Mono, monospace">' + (+v.toFixed(1)) + '</text>';
     }
-    rows.forEach(function (r, i) {
-      var x = L + i * bw + bw * 0.18, w = bw * 0.64;
-      var d = new Date(r.day + "T00:00:00");
-      if (r.partial) {
-        // Today: sold so far is hatched, unsold so far solid, whole bar outlined with a dashed edge.
-        if (r.sold != null) {
-          out += '<rect x="' + x + '" y="' + y(r.sold) + '" width="' + w + '" height="' + (y(0) - y(r.sold)) + '" fill="url(#todayHatch)"><title>Today so far: ' + r.sold + ' sold</title></rect>';
-        }
-        var base = r.sold == null ? 0 : r.sold;
-        out += '<rect x="' + x + '" y="' + y(base + r.unsold) + '" width="' + w + '" height="' + (y(base) - y(base + r.unsold)) + '" fill="' + waste + '"><title>Today so far: ' + r.unsold + ' unsold (' + fmt(r.unsold_kg, 1) + ' kg)</title></rect>';
-        var topV = r.prepared == null ? r.unsold : r.prepared;
-        out += '<rect x="' + x + '" y="' + y(topV) + '" width="' + w + '" height="' + (y(0) - y(topV)) + '" fill="none" stroke="' + ink + '" stroke-width="1.5" stroke-dasharray="4 3"/>';
-        if (r.prepared == null) {
-          out += '<text x="' + (x + w) + '" y="' + (y(r.unsold) - 8) + '" text-anchor="end" font-size="10" fill="' + muted + '" font-family="Public Sans, sans-serif">cooked count not entered</text>';
-        }
-        out += '<text x="' + (x + w / 2) + '" y="' + (H - B + 16) + '" text-anchor="middle" font-size="11" font-weight="700" fill="' + ink + '" font-family="Public Sans, sans-serif">Today</text>';
-      } else {
-        out += '<rect x="' + x + '" y="' + y(r.sold) + '" width="' + w + '" height="' + (y(0) - y(r.sold)) + '" fill="' + acc + '"><title>' + r.sold + ' sold</title></rect>';
-        out += '<rect x="' + x + '" y="' + y(r.prepared) + '" width="' + w + '" height="' + (y(r.sold) - y(r.prepared)) + '" fill="' + waste + '"><title>' + r.unsold + ' unsold (' + fmt(r.unsold_kg, 1) + ' kg)</title></rect>';
-        out += '<text x="' + (x + w / 2) + '" y="' + (H - B + 16) + '" text-anchor="middle" font-size="11" fill="' + (r.weekend ? muted : ink) + '" font-family="Public Sans, sans-serif">' + d.toLocaleDateString("en-SG", { weekday: "short" }) + '</text>';
+    days.forEach(function (d, i) {
+      var x = L + i * bw + bw * 0.18, w = bw * 0.64, base = 0;
+      var date = new Date(d.day + "T00:00:00");
+      var names = order.filter(function (n) { return d.unsold[n]; });
+      names.forEach(function (n) {
+        var val = d.unsold[n];
+        // 1px surface stroke on each side gives the 2px gap between stacked segments.
+        out += '<rect x="' + x + '" y="' + y(base + val) + '" width="' + w + '" height="' + Math.max(0, y(base) - y(base + val)) + '" fill="' + ingColor(order, n) + '"' +
+          (d.partial ? ' fill-opacity="0.55"' : '') + ' stroke="' + surface + '" stroke-width="1"><title>' +
+          esc(n) + ': ' + fmt(val, 2) + ' kg cooked' + (d.partial ? ' (today so far)' : '') + '</title></rect>';
+        base += val;
+      });
+      if (d.partial) {
+        out += '<rect x="' + x + '" y="' + y(Math.max(base, 0)) + '" width="' + w + '" height="' + (y(0) - y(base)) + '" fill="none" stroke="' + ink + '" stroke-width="1.5" stroke-dasharray="4 3"/>';
+        if (!base) out += '<text x="' + (x + w / 2) + '" y="' + (y(0) - 6) + '" text-anchor="middle" font-size="10" fill="' + muted + '" font-family="Public Sans, sans-serif">none yet</text>';
       }
-      out += '<text x="' + (x + w / 2) + '" y="' + (H - B + 30) + '" text-anchor="middle" font-size="10" fill="' + muted + '" font-family="JetBrains Mono, monospace">' + d.getDate() + '/' + (d.getMonth() + 1) + '</text>';
+      out += '<text x="' + (x + w / 2) + '" y="' + (H - B + 16) + '" text-anchor="middle" font-size="11"' + (d.partial ? ' font-weight="700"' : '') +
+        ' fill="' + (d.weekend && !d.partial ? muted : ink) + '" font-family="Public Sans, sans-serif">' + (d.partial ? "Today" : date.toLocaleDateString("en-SG", { weekday: "short" })) + '</text>';
+      out += '<text x="' + (x + w / 2) + '" y="' + (H - B + 30) + '" text-anchor="middle" font-size="10" fill="' + muted + '" font-family="JetBrains Mono, monospace">' + date.getDate() + '/' + (date.getMonth() + 1) + '</text>';
     });
-    if (suggested) {
-      var sy = y(suggested);
-      out += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + sy + '" y2="' + sy + '" stroke="' + ink + '" stroke-width="1.5" stroke-dasharray="6 4"/>';
-      out += '<text x="' + (W - R - 4) + '" y="' + (sy - 6) + '" text-anchor="end" font-size="11" font-weight="600" fill="' + ink + '" stroke="' + cssVar("--surface") + '" stroke-width="4" paint-order="stroke" font-family="Public Sans, sans-serif">Suggested weekday prep: ' + suggested + '</text>';
-    }
     $("chart").innerHTML = out + "</svg>";
+    var seen = order.filter(function (n) { return days.some(function (d) { return d.unsold[n]; }); });
+    $("chart-legend").innerHTML = seen.map(function (n) { return "<span>" + swatch(order, n) + esc(n) + "</span>"; }).join("") +
+      '<span><i class="today-swatch"></i>Today, still in progress (not used for advice)</span>';
   }
+
+  function renderCook(rows, order, weekdays) {
+    $("cook-intro").textContent = "Average leftover at closing over " + weekdays + " weekdays, minus a buffer of half a standard deviation so the stall rarely runs out.";
+    if (!rows.length) { $("cook-table").innerHTML = '<p class="empty">Needs at least 3 weekdays of closing weigh-ins.</p>'; return; }
+    $("cook-table").innerHTML = '<table><thead><tr><th>Ingredient</th><th class="r">Thrown away / weekday</th><th class="r">Cook less, raw</th><th class="r">Cook less, cooked</th><th class="r">Saves / day</th></tr></thead><tbody>' +
+      rows.map(function (r) {
+        return "<tr><td>" + swatch(order, r.ingredient) + esc(r.ingredient) + "</td>" +
+          "<td class='r'>" + kg(r.avg_unsold_cooked_kg) + " cooked</td>" +
+          "<td class='r'><b>" + kg(r.cut_raw_kg) + "</b></td>" +
+          "<td class='r'>" + kg(r.cut_cooked_kg) + "</td>" +
+          "<td class='r'>" + money2(r.sgd_per_day) + "</td></tr>";
+      }).join("") + "</tbody></table>";
+  }
+
+  function renderServe(rows, order) {
+    if (!rows.length) { $("serve-table").innerHTML = '<p class="empty">No serving is being left behind much. Needs at least 5 weekday plates of a dish.</p>'; return; }
+    $("serve-table").innerHTML = '<table><thead><tr><th>Dish · ingredient</th><th class="r">Left / plate</th><th class="r">Serving now → suggested</th><th class="r">Saves / day</th></tr></thead><tbody>' +
+      rows.slice(0, 8).map(function (r) {
+        return "<tr><td>" + swatch(order, r.ingredient) + esc(r.ingredient) + " <span class='muted'>in " + esc(r.dish) + "</span></td>" +
+          "<td class='r'>" + r.avg_left_g + " g <span class='muted'>(" + r.left_pct + "%)</span></td>" +
+          "<td class='r'>" + r.serving_g + " → <b>" + r.new_serving_g + " g</b></td>" +
+          "<td class='r'>" + kg(r.cut_raw_kg_per_day, 2) + " raw · " + money2(r.sgd_per_day) + "</td></tr>";
+      }).join("") + "</tbody></table>";
+  }
+
+  function money2(n) { return "S$" + Number(n).toFixed(2); }
 
   function loadInsights(quiet) {
     if (!state.insightStall) return Promise.resolve();
@@ -460,36 +502,30 @@
       var key = JSON.stringify(data);
       if (quiet && key === state.insightsKey) return;
       state.insightsKey = key;
-      var s = data.stall, sg = data.suggestion, t = data.today;
-      if (sg) {
-        $("kpis").innerHTML =
-          kpi("Cooked per weekday", Math.round(sg.avg_prepared), "portions", "") +
-          kpi("Sold per weekday", Math.round(sg.avg_sold), "portions", "") +
-          kpi("Unsold per weekday", Math.round(sg.avg_unsold), fmt(sg.waste_pct, 0) + "% of food", "warn") +
-          kpi("Suggested prep", sg.suggested_prep, "portions", "hl");
-        $("rec").innerHTML =
-          '<span class="label">Recommendation for ' + esc(s.name) + '</span>' +
-          '<h3>Cook <strong class="num">' + sg.suggested_prep + '</strong> portions on weekdays instead of about <span class="num">' + Math.round(sg.avg_prepared) + '</span>.</h3>' +
-          '<p>That is <b class="num">' + sg.portions_saved_per_day + '</b> fewer portions a day, about <b class="num">' + fmt(sg.kg_saved_per_day, 1) + ' kg</b> less food thrown away and <b class="num">' + money(sg.sgd_saved_per_day) + '</b> saved in ingredients. Over a month of 22 trading days that is <b class="num">' + money(sg.sgd_saved_per_month) + '</b>.</p>' +
-          '<p class="muted" style="font-size:0.85rem">Based on ' + sg.weekdays_used + ' weekdays. Suggested prep is average weekday sales plus half a standard deviation (' + fmt(sg.sd_sold, 1) + ' portions), so the stall rarely sells out.</p>';
-      } else {
-        $("kpis").innerHTML = "";
-        $("rec").innerHTML = '<span class="label">Recommendation for ' + esc(s.name) + '</span><p>Needs at least 3 weekdays of portions cooked and closing weigh-ins before it can suggest a number.</p>';
-      }
-      renderChart(s, data.history, sg && sg.suggested_prep);
-      var demo = data.history.filter(function (r) { return r.demo; });
+      var s = data.stall, order = data.ingredient_order, t = data.today, tot = data.totals;
+      var past = data.days.filter(function (d) { return !d.partial && !d.weekend; });
+      var avgUnsold = past.length ? past.reduce(function (a, d) { return a + d.unsold_kg; }, 0) / past.length : 0;
+      var avgPlate = past.length ? past.reduce(function (a, d) { return a + d.plate_kg; }, 0) / past.length : 0;
+      $("kpis").innerHTML =
+        kpi("Thrown away at closing", fmt(avgUnsold, 1), "kg cooked / weekday", "warn") +
+        kpi("Left on plates", fmt(avgPlate, 1), "kg / weekday", "") +
+        kpi("Can cook less", fmt(tot.cut_raw_kg_per_day, 1), "kg raw / day", "hl") +
+        kpi("Could save", money(tot.sgd_per_month), "per month", "hl");
+      $("example-menu-note").hidden = !data.menu_is_example;
+      renderChart(s, data.days, order);
+      renderCook(data.cook_less, order, data.weekdays_used);
+      renderServe(data.serve_less, order);
+      var demo = data.days.filter(function (d) { return d.demo; });
       $("demo-note").textContent = demo.length
         ? demo.length + " of the earlier days (" + shortDate(demo[0].day) + " to " + shortDate(demo[demo.length - 1].day) + ") are generated demo data."
         : "All days shown are real data.";
-      // Don't overwrite a number the vendor is typing.
-      if (document.activeElement !== $("in-prep") && !state.prepDirty) $("in-prep").value = t.prepared == null ? "" : t.prepared;
+      var names = order.filter(function (n) { return t.unsold[n]; });
       $("today").innerHTML = '<table><tbody>' +
         '<tr><td>Items weighed</td><td class="r">' + t.drops + '</td></tr>' +
         '<tr><td>Not counted (no food waste in photo)</td><td class="r">' + t.not_waste_drops + '</td></tr>' +
-        '<tr><td>Customer plate waste</td><td class="r">' + fmt(t.plate_kg, 2) + ' kg</td></tr>' +
-        '<tr><td>Vendor unsold food</td><td class="r">' + fmt(t.unsold_kg, 2) + ' kg</td></tr>' +
-        '<tr><td>Unsold portions (' + s.portion_g + ' g each)</td><td class="r">' + t.unsold_portions + '</td></tr>' +
-        (t.prepared != null ? '<tr><td>Portions sold so far</td><td class="r">' + Math.max(0, t.prepared - t.unsold_portions) + '</td></tr>' : '') +
+        '<tr><td>Left on customer plates</td><td class="r">' + kg(t.plate_kg, 2) + '</td></tr>' +
+        '<tr><td>Thrown away by vendor</td><td class="r">' + kg(t.unsold_kg, 2) + '</td></tr>' +
+        names.map(function (n) { return '<tr><td class="indent">' + swatch(order, n) + esc(n) + '</td><td class="r">' + kg(t.unsold[n], 2) + '</td></tr>'; }).join("") +
         '</tbody></table>';
     }).catch(function (e) {
       if (quiet) $("insights-updated").textContent = "Cannot reach the server";
@@ -507,10 +543,8 @@
     if (!document.hidden && state.tab === "insights") loadInsights(true);
   });
 
-  $("in-prep").addEventListener("input", function () { state.prepDirty = true; });
-
   $("btn-reset-demo").addEventListener("click", function () {
-    if (!window.confirm("Replace the demo history with a fresh 14 days ending yesterday? Real weigh-ins and portions you entered are kept.")) return;
+    if (!window.confirm("Replace the demo history with a fresh 14 days ending yesterday? Real weigh-ins are kept.")) return;
     var btn = $("btn-reset-demo"); btn.disabled = true;
     api("/api/demo/reset", { method: "POST" })
       .then(function () { toast("Demo data reset"); state.insightsKey = null; return loadInsights(); })
@@ -518,15 +552,140 @@
       .finally(function () { btn.disabled = false; });
   });
 
-  $("prep-form").addEventListener("submit", function (e) {
+  // ---------- Menu ----------
+  function loadMenu() {
+    var stallId = state.insightStall;
+    $("menu-title").textContent = "Menu · " + state.stalls[stallId].name;
+    return api("/api/stalls/" + stallId + "/menu").then(function (m) {
+      if (stallId !== state.insightStall) return;
+      state.menu = m;
+      if (!state.menuEditing) { $("menu-status").textContent = m.is_example ? "Example menu with made-up recipes." : "Saved menu."; renderMenuView(m); }
+    }).catch(function (e) { toast(e.message); });
+  }
+
+  function renderMenuView(m) {
+    var ing = {}; m.ingredients.forEach(function (i) { ing[i.name] = i; });
+    $("menu-view").innerHTML = '<div class="menu-items">' + m.items.map(function (item) {
+      var total = item.recipe.reduce(function (a, l) { return a + l.grams; }, 0);
+      return '<div class="menu-item"><h4>' + esc(item.name) + ' <span class="muted">' + Math.round(total) + ' g</span></h4><ul>' +
+        item.recipe.map(function (l) {
+          var i = ing[l.ingredient] || {};
+          return "<li><span>" + esc(l.ingredient) + "</span><span class='num'>" + l.grams + " g cooked · " + fmt(l.grams / (i.cooked_per_raw || 1), 0) + " g raw</span></li>";
+        }).join("") + "</ul></div>";
+    }).join("") + "</div>";
+  }
+
+  function ingredientRow(i) {
+    var tr = document.createElement("tr");
+    tr.innerHTML = '<td><input type="text" class="ing-name" aria-label="Ingredient name" maxlength="60" value="' + esc(i.name) + '"></td>' +
+      '<td><input type="number" class="ing-ratio" aria-label="Cooked weight divided by raw weight" min="0.05" max="10" step="0.05" value="' + i.cooked_per_raw + '"></td>' +
+      '<td><input type="number" class="ing-cost" aria-label="Cost in S$ per raw kg" min="0" max="500" step="0.1" value="' + i.cost_per_raw_kg + '"></td>' +
+      '<td><button class="btn ghost small" type="button" aria-label="Remove ingredient">Remove</button></td>';
+    tr.querySelector("button").addEventListener("click", function () { tr.remove(); });
+    return tr;
+  }
+
+  function recipeRow(l) {
+    var row = document.createElement("div");
+    row.className = "recipe-row";
+    row.innerHTML = '<input type="text" class="line-ing" aria-label="Ingredient" list="ingredient-names" value="' + esc(l.ingredient) + '">' +
+      '<input type="number" class="line-g" aria-label="Cooked grams per portion" min="1" max="2000" step="5" value="' + l.grams + '"><span class="hint">g</span>' +
+      '<button class="btn ghost small" type="button" aria-label="Remove ingredient from this item">Remove</button>';
+    row.querySelector("button").addEventListener("click", function () { row.remove(); });
+    return row;
+  }
+
+  function itemBlock(item) {
+    var div = document.createElement("div");
+    div.className = "edit-item";
+    div.innerHTML = '<div class="inline"><input type="text" class="item-name" aria-label="Menu item name" maxlength="80" value="' + esc(item.name) + '">' +
+      '<button class="btn ghost small" type="button">Remove item</button></div><div class="recipe"></div>' +
+      '<button class="btn ghost small add-line" type="button">Add ingredient to this item</button>';
+    var lines = div.querySelector(".recipe");
+    item.recipe.forEach(function (l) { lines.appendChild(recipeRow(l)); });
+    div.querySelector(".inline button").addEventListener("click", function () { div.remove(); });
+    div.querySelector(".add-line").addEventListener("click", function () { lines.appendChild(recipeRow({ ingredient: "", grams: 100 })); });
+    return div;
+  }
+
+  function openEditor(m, status) {
+    state.menuEditing = true;
+    $("menu-view").hidden = true; $("menu-editor").hidden = false; $("menu-error").hidden = true;
+    $("btn-menu-edit").disabled = true;
+    $("menu-status").textContent = status;
+    var tb = $("edit-ingredients"); tb.innerHTML = "";
+    m.ingredients.forEach(function (i) { tb.appendChild(ingredientRow(i)); });
+    var items = $("edit-items"); items.innerHTML = "";
+    m.items.forEach(function (it) { items.appendChild(itemBlock(it)); });
+    refreshIngredientList();
+  }
+
+  function closeEditor() {
+    state.menuEditing = false;
+    $("menu-view").hidden = false; $("menu-editor").hidden = true; $("btn-menu-edit").disabled = false;
+    loadMenu();
+  }
+  function leaveEditor() {
+    if (!window.confirm("Discard your unsaved menu changes?")) return false;
+    closeEditor(); return true;
+  }
+
+  // Suggest existing ingredient names while typing a recipe line.
+  function refreshIngredientList() {
+    var dl = $("ingredient-names");
+    if (!dl) { dl = document.createElement("datalist"); dl.id = "ingredient-names"; document.body.appendChild(dl); }
+    dl.innerHTML = Array.prototype.map.call(document.querySelectorAll("#edit-ingredients .ing-name"), function (i) {
+      return '<option value="' + esc(i.value) + '">';
+    }).join("");
+  }
+  $("edit-ingredients").addEventListener("input", refreshIngredientList);
+
+  function readEditor() {
+    return {
+      ingredients: Array.prototype.map.call(document.querySelectorAll("#edit-ingredients tr"), function (tr) {
+        return { name: tr.querySelector(".ing-name").value.trim(), cooked_per_raw: parseFloat(tr.querySelector(".ing-ratio").value), cost_per_raw_kg: parseFloat(tr.querySelector(".ing-cost").value) || 0 };
+      }),
+      items: Array.prototype.map.call(document.querySelectorAll("#edit-items .edit-item"), function (div) {
+        return {
+          name: div.querySelector(".item-name").value.trim(),
+          recipe: Array.prototype.map.call(div.querySelectorAll(".recipe-row"), function (r) {
+            return { ingredient: r.querySelector(".line-ing").value.trim(), grams: parseFloat(r.querySelector(".line-g").value) };
+          })
+        };
+      })
+    };
+  }
+
+  $("btn-menu-edit").addEventListener("click", function () { if (state.menu) openEditor(state.menu, "Editing the menu. Changes apply to new weigh-ins; past weigh-ins keep their ingredients."); });
+  $("btn-menu-cancel").addEventListener("click", function () { leaveEditor(); });
+  $("btn-add-ingredient").addEventListener("click", function () { $("edit-ingredients").appendChild(ingredientRow({ name: "", cooked_per_raw: 1, cost_per_raw_kg: 0 })); });
+  $("btn-add-item").addEventListener("click", function () { $("edit-items").appendChild(itemBlock({ name: "", recipe: [{ ingredient: "", grams: 100 }] })); });
+
+  $("menu-editor").addEventListener("submit", function (e) {
     e.preventDefault();
-    var n = parseInt($("in-prep").value, 10);
-    if (!(n >= 0)) { toast("Enter the number of portions cooked today."); return; }
-    api("/api/stalls/" + state.insightStall + "/prep", {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ day: state.today, portions: n })
-    }).then(function () { state.prepDirty = false; toast("Saved " + n + " portions for today"); loadInsights(); })
-      .catch(function (e) { toast(e.message); });
+    var err = $("menu-error"); err.hidden = true;
+    api("/api/stalls/" + state.insightStall + "/menu", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(readEditor()) })
+      .then(function (m) {
+        state.stalls[state.insightStall].menu = m.items.map(function (i) { return i.name; });
+        if ($("sel-stall").value === state.insightStall) fillDishes();
+        toast("Menu saved"); closeEditor(); state.insightsKey = null; loadInsights();
+      })
+      .catch(function (e) { err.textContent = e.message; err.hidden = false; });
+  });
+
+  $("in-menu-photo").addEventListener("change", function () {
+    var file = $("in-menu-photo").files[0];
+    if (!file) return;
+    if (state.menuEditing && !leaveEditor()) { $("in-menu-photo").value = ""; return; }
+    var fd = new FormData(); fd.append("image", file);
+    $("menu-status").textContent = "Reading the menu photo. This can take up to a minute…";
+    api("/api/stalls/" + state.insightStall + "/menu/scan", { method: "POST", body: fd })
+      .then(function (draft) {
+        if (!draft.items.length) { $("menu-status").textContent = "No dishes found. " + (draft.notes || "Try a sharper photo of the menu."); return; }
+        openEditor(draft, "Draft read by " + draft.model + " from your photo. Weights and prices are estimates: check them, then save. " + (draft.notes || ""));
+      })
+      .catch(function (e) { $("menu-status").textContent = e.message; })
+      .finally(function () { $("in-menu-photo").value = ""; });
   });
 
   // ---------- Compost ----------

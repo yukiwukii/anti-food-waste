@@ -64,21 +64,6 @@ def test_photo_without_classifier_is_stored(client):
     client.post("/api/bins/NS-01/transfers")
 
 
-def test_insights_from_seeded_history(client):
-    data = client.get("/api/stalls/cr/insights").json()
-    assert len(data["history"]) == 15  # 14 demo days + today
-    assert all(r["demo"] for r in data["history"][:-1])
-    assert data["history"][-1]["partial"] and not data["history"][-1]["demo"]
-    s = data["suggestion"]
-    assert s["suggested_prep"] < s["avg_prepared"]
-    assert s["portions_saved_per_day"] > 0
-
-
-def test_prep_upsert_shows_in_today(client):
-    today = client.get("/api/health").json()["today"]
-    assert client.put("/api/stalls/mv/prep", json={"day": today, "portions": 200}).status_code == 200
-    assert client.put("/api/stalls/mv/prep", json={"day": today, "portions": 230}).status_code == 200
-    assert client.get("/api/stalls/mv/insights").json()["today"]["prepared"] == 230
 
 
 def test_compost_summary_counts_seeded_transfers(client):
@@ -87,81 +72,92 @@ def test_compost_summary_counts_seeded_transfers(client):
     assert c["diverted_kg"] > 0
 
 
-def test_not_waste_drop_is_left_out_of_insights(client, monkeypatch):
-    from app import main
+def fake_classify(**kw):
     from app.classifier import Classification
 
-    monkeypatch.setattr(
-        main, "classify",
-        lambda *a, **k: Classification("Ramen", 0.8, "openai", is_waste=False, edible_fraction=0.0, waste_note="Only broth."),
-    )
-    before = client.get("/api/stalls/jp/insights").json()["today"]
-    r = client.post(
-        "/api/bins/SS-01/drops",
-        data={"stall_id": "jp", "source": "vendor", "weight_kg": "2.0"},
-        files={"image": ("bowl.png", b"\x89PNG fake", "image/png")},
-    )
-    assert r.status_code == 201
-    assert r.json()["drop"]["is_waste"] is False
-    after = client.get("/api/stalls/jp/insights").json()["today"]
-    assert after["unsold_kg"] == before["unsold_kg"]
-    assert after["not_waste_drops"] == before["not_waste_drops"] + 1
-    # The broth is still physically in the bin.
-    assert client.get("/api/bins/SS-01").json()["load_kg"] >= 2.0
-    client.post("/api/bins/SS-01/transfers")
+    return lambda *a, **k: Classification(**kw)
 
 
-def test_mixed_plate_counts_only_edible_share(client, monkeypatch):
-    from app import main
-    from app.classifier import Classification
-
-    monkeypatch.setattr(
-        main, "classify",
-        lambda *a, **k: Classification(
-            "Chicken katsu don", 0.9, "openai", is_waste=True, edible_fraction=0.25,
-            waste_note="Some rice and bones.", reasoning="Rice 25%, bones 75%.",
-            prompt="PROMPT", raw_output='{"edible_fraction": 0.25}', model="gpt-test",
-        ),
-    )
-    before = client.get("/api/stalls/jp/insights").json()["today"]["unsold_kg"]
-    r = client.post(
-        "/api/bins/SS-01/drops",
-        data={"stall_id": "jp", "source": "vendor", "weight_kg": "4.0"},
-        files={"image": ("plate.png", b"\x89PNG fake", "image/png")},
-    )
-    d = r.json()["drop"]
-    assert d["waste_kg"] == 1.0
-    assert "model_reasoning" not in d  # list view stays small
-    after = client.get("/api/stalls/jp/insights").json()["today"]["unsold_kg"]
-    assert round(after - before, 3) == 1.0
-
-    detail = client.get(f"/api/drops/{d['id']}").json()
-    assert detail["model_reasoning"] == "Rice 25%, bones 75%."
-    assert detail["model_prompt"] == "PROMPT"
-    assert detail["model"] == "gpt-test"
-    assert detail["stall_name"] == "Japanese"
-    client.post("/api/bins/SS-01/transfers")
+def test_insights_from_seeded_history(client):
+    data = client.get("/api/stalls/cr/insights").json()
+    assert len(data["days"]) == 15  # 14 demo days + today
+    assert all(d["demo"] for d in data["days"][:-1])
+    assert data["days"][-1]["partial"]
+    assert data["menu_is_example"]
+    assert data["ingredient_order"][:2] == ["White rice", "Roast chicken"]
+    assert data["cook_less"] and data["cook_less"][0]["cut_raw_kg"] > 0
+    assert data["serve_less"] and data["serve_less"][0]["ingredient"] == "White rice"
+    assert data["totals"]["sgd_per_month"] > 0
 
 
-def test_today_row_updates_with_weigh_ins(client):
-    today = client.get("/api/health").json()["today"]
-    client.put("/api/stalls/in/prep", json={"day": today, "portions": 100})
-    row = client.get("/api/stalls/in/insights").json()["history"][-1]
-    assert row["day"] == today and row["prepared"] == 100
-    client.post("/api/bins/NS-01/drops", data={"stall_id": "in", "source": "vendor", "weight_kg": "4.0"})
-    row2 = client.get("/api/stalls/in/insights").json()["history"][-1]
-    assert row2["unsold"] == row["unsold"] + 10  # 4 kg / 400 g portions
-    assert row2["sold"] == 100 - row2["unsold"]
+def test_device_label_splits_by_recipe(client):
+    r = client.post("/api/bins/NS-01/drops", data={"stall_id": "cr", "source": "vendor", "weight_kg": "3.9", "dish": "Roasted chicken rice"})
+    parts = {p["ingredient"]: p["waste_kg"] for p in r.json()["drop"]["ingredients"]}
+    assert parts == {"White rice": 2.5, "Roast chicken": 1.1, "Cucumber": 0.3}  # 250:110:30
+    today = client.get("/api/stalls/cr/insights").json()["today"]
+    assert today["unsold"]["White rice"] >= 2.5
     client.post("/api/bins/NS-01/transfers")
 
 
+def test_photo_split_feeds_today_by_ingredient(client, monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(main, "classify", fake_classify(
+        dish="Chicken katsu don", confidence=0.9, classified_by="openai", is_waste=True, edible_fraction=0.5,
+        ingredients=[("Japanese rice", 1.0)], waste_note="A tray of rice.", reasoning="Only rice.",
+        prompt="PROMPT", raw_output="{}", model="gpt-test",
+    ))
+    before = client.get("/api/stalls/jp/insights").json()["today"]["unsold"].get("Japanese rice", 0)
+    r = client.post("/api/bins/SS-01/drops", data={"stall_id": "jp", "source": "vendor", "weight_kg": "4.0"},
+                    files={"image": ("tray.png", b"\x89PNG fake", "image/png")})
+    d = r.json()["drop"]
+    assert d["waste_kg"] == 2.0 and d["ingredients"] == [{"ingredient": "Japanese rice", "share": 1.0, "waste_kg": 2.0}]
+    after = client.get("/api/stalls/jp/insights").json()["today"]["unsold"]["Japanese rice"]
+    assert round(after - before, 3) == 2.0
+    detail = client.get(f"/api/drops/{d['id']}").json()
+    assert detail["model_reasoning"] == "Only rice." and detail["ingredients"][0]["ingredient"] == "Japanese rice"
+    client.post("/api/bins/SS-01/transfers")
+
+
+def test_not_waste_adds_no_ingredients(client, monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(main, "classify", fake_classify(
+        dish="Ramen", confidence=0.8, classified_by="openai", is_waste=False, edible_fraction=0.0, waste_note="Only broth.",
+    ))
+    r = client.post("/api/bins/SS-01/drops", data={"stall_id": "jp", "source": "vendor", "weight_kg": "2.0"},
+                    files={"image": ("bowl.png", b"\x89PNG fake", "image/png")})
+    assert r.json()["drop"]["ingredients"] == []
+    client.post("/api/bins/SS-01/transfers")
+
+
+def test_menu_round_trip_and_validation(client):
+    menu = client.get("/api/stalls/bm/menu").json()
+    assert menu["is_example"] and menu["items"][0]["name"] == "Ban mian soup"
+    menu["items"].append({"name": "Fishball noodles", "recipe": [{"ingredient": "Ban mian noodles", "grams": 200}]})
+    saved = client.put("/api/stalls/bm/menu", json={"ingredients": menu["ingredients"], "items": menu["items"]}).json()
+    assert not saved["is_example"] and saved["items"][-1]["name"] == "Fishball noodles"
+    stall = next(s for l in client.get("/api/locations").json() for s in l["stalls"] if s["id"] == "bm")
+    assert "Fishball noodles" in stall["menu"]
+    bad = {"ingredients": menu["ingredients"], "items": [{"name": "X", "recipe": [{"ingredient": "Caviar", "grams": 10}]}]}
+    assert client.put("/api/stalls/bm/menu", json=bad).status_code == 422
+
+
+def test_menu_scan_returns_draft_without_saving(client, monkeypatch):
+    from app import main
+
+    draft = {"notes": "", "ingredients": [{"name": "Rice", "cooked_per_raw": 2.5, "cost_per_raw_kg": 2}],
+             "items": [{"name": "Plain rice", "recipe": [{"ingredient": "Rice", "grams": 250}]}], "model": "gpt-test"}
+    monkeypatch.setattr(main, "scan_menu", lambda data, media_type: draft)
+    r = client.post("/api/stalls/ml/menu/scan", files={"image": ("menu.jpg", b"jpeg", "image/jpeg")})
+    assert r.json()["items"][0]["name"] == "Plain rice"
+    assert client.get("/api/stalls/ml/menu").json()["items"][0]["name"] == "Mala xiang guo"
+
+
 def test_demo_reset_keeps_real_data(client):
-    today = client.get("/api/health").json()["today"]
-    client.put("/api/stalls/bm/prep", json={"day": today, "portions": 150})
     r = client.post("/api/bins/SS-01/drops", data={"stall_id": "bm", "source": "plate", "weight_kg": "0.2"})
     real_id = r.json()["drop"]["id"]
     assert client.post("/api/demo/reset").status_code == 200
-    hist = client.get("/api/stalls/bm/insights").json()["history"]
-    assert len(hist) == 15 and hist[-1]["prepared"] == 150
+    assert len(client.get("/api/stalls/bm/insights").json()["days"]) == 15
     assert client.get(f"/api/drops/{real_id}").status_code == 200
     client.post("/api/bins/SS-01/transfers")
