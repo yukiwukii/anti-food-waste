@@ -42,7 +42,14 @@ class Drop(SQLModel, table=True):
     # False when the camera saw nothing edible (empty plate, bones, broth). The weight still
     # sits in the bin, but it is left out of food-waste figures.
     is_waste: bool = True
+    edible_fraction: float = 1.0  # model's estimate of the share of weight that is edible food
+    waste_kg: Optional[float] = None  # weight_kg x edible_fraction; this is what counts as food waste
     waste_note: Optional[str] = None
+    # What the vision model was asked and said, so it can be shown on the page.
+    model: Optional[str] = None
+    model_prompt: Optional[str] = None
+    model_reasoning: Optional[str] = None
+    model_output: Optional[str] = None
     image_file: Optional[str] = None
     created_at: NaiveDatetime = Field(default_factory=now, index=True)
     transfer_id: Optional[int] = Field(default=None, foreign_key="composttransfer.id", index=True)

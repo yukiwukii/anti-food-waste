@@ -144,11 +144,18 @@
       var t = new Date(d.created_at);
       var by = d.classified_by === "openai" ? "OpenAI " + Math.round(d.confidence * 100) + "%" : d.classified_by === "device" ? "Device label" : "–";
       var tr = document.createElement("tr");
+      tr.className = "clickable"; tr.tabIndex = 0;
+      tr.setAttribute("aria-label", "Show details for " + (d.dish || "unidentified item") + " at " + t.toLocaleTimeString("en-SG"));
+      tr.addEventListener("click", function () { openDetail(d.id); });
+      tr.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(d.id); } });
+      var counted = d.waste_kg == null ? d.weight_kg : d.waste_kg;
+      var share = d.is_waste && d.edible_fraction < 1 ? " <span class='muted'>(" + Math.round(d.edible_fraction * 100) + "%)</span>" : "";
       tr.innerHTML = "<td class='num'>" + t.toLocaleTimeString("en-SG", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + "</td>" +
         "<td>" + esc(state.stalls[d.stall_id].name) + "</td><td>" + esc(d.dish || "Unidentified") + "</td>" +
         "<td><span class='pill " + d.source + "'>" + (d.source === "plate" ? "Customer" : "Vendor") + "</span>" +
         (d.is_waste ? "" : " <span class='pill none' title='" + esc(d.waste_note) + "'>Not waste</span>") + "</td>" +
-        "<td>" + by + "</td><td class='r" + (d.is_waste ? "" : " struck") + "'>" + fmt(d.weight_kg, 3) + "</td>";
+        "<td>" + by + "</td><td class='r'>" + fmt(d.weight_kg, 3) + "</td>" +
+        "<td class='r" + (d.is_waste ? "" : " struck") + "'>" + fmt(counted, 3) + share + "</td>";
       body.appendChild(tr);
     });
     $("log-count").textContent = drops.length;
@@ -238,12 +245,61 @@
     if ($("sel-camera").value) startCamera($("sel-camera").value); else stopCamera();
   });
 
+  // ---------- Weigh-in details ----------
+  function factRow(label, value) {
+    return "<div><dt>" + label + "</dt><dd>" + value + "</dd></div>";
+  }
+
+  function openDetail(id) {
+    var dlg = $("detail");
+    $("detail-title").textContent = "Loading…";
+    $("detail-body").innerHTML = "";
+    if (!dlg.open) dlg.showModal();
+    api("/api/drops/" + id).then(function (d) {
+      var t = new Date(d.created_at);
+      var counted = d.waste_kg == null ? d.weight_kg : d.waste_kg;
+      $("detail-title").textContent = (d.dish || "Unidentified") + " · " + d.stall_name;
+      var by = d.classified_by === "openai" ? "OpenAI vision" : d.classified_by === "device" ? "Label sent with the weigh-in" : d.classified_by === "seed" ? "Demo history" : "Not identified";
+      var html = "";
+      if (d.image_url) html += '<img class="detail-photo" src="' + d.image_url + '" alt="Photo taken by the bin camera">';
+      html += '<dl class="facts">' +
+        factRow("Time", t.toLocaleString("en-SG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" })) +
+        factRow("Source", d.source === "plate" ? "Customer plate" : "Vendor, end of day") +
+        factRow("Weighed", fmt(d.weight_kg, 3) + " kg") +
+        factRow("Edible share", d.is_waste ? Math.round(d.edible_fraction * 100) + "%" : "0% (not food waste)") +
+        factRow("Counted as food waste", "<b>" + fmt(counted, 3) + " kg</b>") +
+        factRow("Dish confidence", d.confidence == null ? "–" : Math.round(d.confidence * 100) + "%") +
+        factRow("Identified by", by) +
+        factRow("Model", d.model ? esc(d.model) : "–") +
+        "</dl>";
+      if (d.classified_by !== "openai") {
+        html += '<p class="note">No photo was analysed for this weigh-in, so the full weight counts as food waste.</p>';
+      } else {
+        html += "<h3>What the model saw</h3><p>" + esc(d.waste_note) + "</p>";
+        html += "<h3>Model's reasoning</h3><p class='prewrap'>" + esc(d.model_reasoning) + "</p>";
+        var pretty = d.model_output;
+        try { pretty = JSON.stringify(JSON.parse(d.model_output), null, 2); } catch (e) {}
+        html += "<h3>Raw model output</h3><pre>" + esc(pretty) + "</pre>";
+        html += "<details><summary>Prompt sent to the model</summary><pre>" + esc(d.model_prompt) + "</pre></details>";
+      }
+      $("detail-body").innerHTML = html;
+    }).catch(function (e) {
+      $("detail-title").textContent = "Could not load this weigh-in";
+      $("detail-body").innerHTML = '<p class="error">' + esc(e.message) + "</p>";
+    });
+  }
+  $("detail-close").addEventListener("click", function () { $("detail").close(); });
+  $("detail").addEventListener("click", function (e) { if (e.target === $("detail")) $("detail").close(); });
+  $("btn-last-detail").addEventListener("click", function () { if (state.lastDropId) openDetail(state.lastDropId); });
+
   function showResult(res, photo) {
     var d = res.drop;
+    state.lastDropId = d.id;
+    $("btn-last-detail").hidden = d.classified_by !== "openai";
     var stall = state.stalls[d.stall_id];
-    $("cam-dish").textContent = d.is_waste
-      ? (d.dish || "Unidentified") + " · " + stall.name
-      : "No food waste" + (d.waste_note ? " · " + d.waste_note : "");
+    $("cam-dish").textContent = !d.is_waste
+      ? "No food waste · 0 kg counted"
+      : (d.dish || "Unidentified") + " · " + Math.round(d.edible_fraction * 100) + "% edible · " + fmt(d.waste_kg == null ? d.weight_kg : d.waste_kg, 3) + " kg counted";
     $("cam-conf").textContent = d.classified_by === "openai" ? Math.round(d.confidence * 100) + "% · OpenAI"
       : d.classified_by === "device" ? "Device label" : photo ? "Not identified" : "No photo";
     var img = $("cam-photo");

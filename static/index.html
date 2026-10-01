@@ -41,6 +41,7 @@
           <div class="scanline"></div>
           <div class="rec">CAM 1</div>
           <div class="tag"><span id="cam-dish">Waiting for food</span><span id="cam-conf">–</span></div>
+          <button class="cam-details" type="button" id="btn-last-detail" hidden>See model reasoning</button>
         </div>
         <div class="readouts">
           <div class="lcd">
@@ -103,10 +104,10 @@
           <button class="btn ghost" type="button" id="btn-rush">Simulate lunch rush (12 items)</button>
         </div>
         <div>
-          <div class="label" style="margin-bottom:6px">Today at this bin · <span id="log-count" class="num">0</span> items</div>
+          <div class="label" style="margin-bottom:6px">Today at this bin · <span id="log-count" class="num">0</span> items · select a row for the model's reasoning</div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Time</th><th>Stall</th><th>Dish</th><th>Source</th><th>Identified by</th><th class="r">kg</th></tr></thead>
+              <thead><tr><th>Time</th><th>Stall</th><th>Dish</th><th>Source</th><th>Identified by</th><th class="r">Weighed kg</th><th class="r">Counted kg</th></tr></thead>
               <tbody id="log-body"></tbody>
             </table>
           </div>
@@ -185,6 +186,14 @@
     </div>
   </section>
 </div>
+
+<dialog id="detail" aria-labelledby="detail-title">
+  <div class="detail-head">
+    <h2 id="detail-title">Weigh-in</h2>
+    <button class="btn ghost" type="button" id="detail-close">Close</button>
+  </div>
+  <div id="detail-body"></div>
+</dialog>
 
 <div class="toast" id="toast" role="status" hidden></div>
 <script src="app.js"></script>

@@ -20,6 +20,12 @@ def _sqlite_foreign_keys(dbapi_connection, _record):
 _ADDED_COLUMNS = [
     ("drop", "is_waste", "BOOLEAN NOT NULL DEFAULT 1"),
     ("drop", "waste_note", "VARCHAR"),
+    ("drop", "edible_fraction", "FLOAT NOT NULL DEFAULT 1.0"),
+    ("drop", "waste_kg", "FLOAT"),
+    ("drop", "model", "VARCHAR"),
+    ("drop", "model_prompt", "VARCHAR"),
+    ("drop", "model_reasoning", "VARCHAR"),
+    ("drop", "model_output", "VARCHAR"),
 ]
 
 
@@ -30,6 +36,11 @@ def init_db() -> None:
         for table, column, ddl in _ADDED_COLUMNS:
             if column not in existing[table]:
                 conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN {column} {ddl}'))
+        # Rows from before the edible-fraction estimate: all of the weight counts, unless marked not waste.
+        if "weight_kg" in existing["drop"]:
+            conn.execute(text(
+                'UPDATE "drop" SET waste_kg = CASE WHEN is_waste THEN weight_kg ELSE 0 END WHERE waste_kg IS NULL'
+            ))
 
 
 def get_session() -> Iterator[Session]:

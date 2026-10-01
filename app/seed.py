@@ -70,7 +70,7 @@ def seed_demo_history(session: Session, days: int = 14, today: date | None = Non
                 t = datetime.combine(day, time(11, 0)) + timedelta(minutes=rng.randint(0, 540))
                 day_drops[bin_id].append(Drop(
                     bin_id=bin_id, stall_id=sid, source="plate",
-                    weight_kg=round(rng.uniform(0.04, 0.25), 3),
+                    weight_kg=(w := round(rng.uniform(0.04, 0.25), 3)), waste_kg=w,
                     dish=rng.choice(menu), confidence=round(rng.uniform(0.8, 0.97), 2),
                     classified_by="seed", created_at=t,
                 ))
@@ -78,7 +78,7 @@ def seed_demo_history(session: Session, days: int = 14, today: date | None = Non
             if unsold > 0:
                 day_drops[bin_id].append(Drop(
                     bin_id=bin_id, stall_id=sid, source="vendor",
-                    weight_kg=round(unsold * portion / 1000, 3),
+                    weight_kg=(w := round(unsold * portion / 1000, 3)), waste_kg=w,
                     dish=menu[0], confidence=0.95, classified_by="seed",
                     created_at=datetime.combine(day, time(20, 30)) + timedelta(minutes=rng.randint(0, 25)),
                 ))

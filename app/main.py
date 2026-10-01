@@ -57,8 +57,11 @@ def _day_bounds(day: date) -> tuple[datetime, datetime]:
     return start, start + timedelta(days=1)
 
 
-def _drop_out(d: Drop) -> dict:
-    out = d.model_dump(exclude={"image_file"})
+DETAIL_FIELDS = {"model_prompt", "model_reasoning", "model_output"}
+
+
+def _drop_out(d: Drop, detail: bool = False) -> dict:
+    out = d.model_dump(exclude={"image_file"} if detail else {"image_file"} | DETAIL_FIELDS)
     out["image_url"] = f"/api/drops/{d.id}/image" if d.image_file else None
     return out
 
@@ -149,7 +152,13 @@ async def create_drop(
         confidence=result.confidence,
         classified_by=result.classified_by,
         is_waste=result.is_waste,
+        edible_fraction=result.edible_fraction,
+        waste_kg=round(weight_kg * result.edible_fraction, 3) if result.is_waste else 0.0,
         waste_note=result.waste_note,
+        model=result.model,
+        model_prompt=result.prompt,
+        model_reasoning=result.reasoning,
+        model_output=result.raw_output,
         image_file=image_file,
     )
     session.add(drop)
@@ -179,6 +188,15 @@ def list_drops(
     if stall_id:
         q = q.where(Drop.stall_id == stall_id)
     return [_drop_out(d) for d in session.exec(q).all()]
+
+
+@app.get("/api/drops/{drop_id}")
+def get_drop(drop_id: int, session: SessionDep):
+    """One weigh-in, including the prompt sent to the vision model and its full answer."""
+    d = _get_or_404(session, Drop, drop_id)
+    out = _drop_out(d, detail=True)
+    out["stall_name"] = session.get(Stall, d.stall_id).name
+    return out
 
 
 @app.get("/api/drops/{drop_id}/image")
@@ -262,10 +280,10 @@ def stall_insights(stall_id: str, session: SessionDep, days: int = Query(14, ge=
     unsold_kg: dict[date, float] = {}
     plate_kg: dict[date, float] = {}
     for d in drops:
-        if not d.is_waste:
-            continue  # empty plates, bones, broth: in the bin, but not food waste
+        # Only the edible share counts; bones, broth and empty plates add weight but no food waste.
+        counted = d.waste_kg if d.waste_kg is not None else (d.weight_kg if d.is_waste else 0.0)
         bucket = unsold_kg if d.source == "vendor" else plate_kg
-        bucket[d.created_at.date()] = bucket.get(d.created_at.date(), 0.0) + d.weight_kg
+        bucket[d.created_at.date()] = bucket.get(d.created_at.date(), 0.0) + counted
 
     history = [
         build_day(day, preps[day], unsold_kg.get(day, 0.0), plate_kg.get(day, 0.0), stall.portion_g)

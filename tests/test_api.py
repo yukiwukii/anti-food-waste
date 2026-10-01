@@ -91,7 +91,7 @@ def test_not_waste_drop_is_left_out_of_insights(client, monkeypatch):
 
     monkeypatch.setattr(
         main, "classify",
-        lambda *a, **k: Classification("Ramen", 0.8, "openai", is_waste=False, waste_note="Only broth."),
+        lambda *a, **k: Classification("Ramen", 0.8, "openai", is_waste=False, edible_fraction=0.0, waste_note="Only broth."),
     )
     before = client.get("/api/stalls/jp/insights").json()["today"]
     r = client.post(
@@ -106,4 +106,36 @@ def test_not_waste_drop_is_left_out_of_insights(client, monkeypatch):
     assert after["not_waste_drops"] == before["not_waste_drops"] + 1
     # The broth is still physically in the bin.
     assert client.get("/api/bins/SS-01").json()["load_kg"] >= 2.0
+    client.post("/api/bins/SS-01/transfers")
+
+
+def test_mixed_plate_counts_only_edible_share(client, monkeypatch):
+    from app import main
+    from app.classifier import Classification
+
+    monkeypatch.setattr(
+        main, "classify",
+        lambda *a, **k: Classification(
+            "Chicken katsu don", 0.9, "openai", is_waste=True, edible_fraction=0.25,
+            waste_note="Some rice and bones.", reasoning="Rice 25%, bones 75%.",
+            prompt="PROMPT", raw_output='{"edible_fraction": 0.25}', model="gpt-test",
+        ),
+    )
+    before = client.get("/api/stalls/jp/insights").json()["today"]["unsold_kg"]
+    r = client.post(
+        "/api/bins/SS-01/drops",
+        data={"stall_id": "jp", "source": "vendor", "weight_kg": "4.0"},
+        files={"image": ("plate.png", b"\x89PNG fake", "image/png")},
+    )
+    d = r.json()["drop"]
+    assert d["waste_kg"] == 1.0
+    assert "model_reasoning" not in d  # list view stays small
+    after = client.get("/api/stalls/jp/insights").json()["today"]["unsold_kg"]
+    assert round(after - before, 3) == 1.0
+
+    detail = client.get(f"/api/drops/{d['id']}").json()
+    assert detail["model_reasoning"] == "Rice 25%, bones 75%."
+    assert detail["model_prompt"] == "PROMPT"
+    assert detail["model"] == "gpt-test"
+    assert detail["stall_name"] == "Japanese"
     client.post("/api/bins/SS-01/transfers")
