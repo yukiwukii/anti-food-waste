@@ -15,7 +15,7 @@ IMAGE_DIR = DATA_DIR / "images"
 # "auto": use OpenAI vision when a photo is uploaded and OPENAI_API_KEY is set,
 # falling back to the device label if the call fails. "off": never call OpenAI.
 CLASSIFIER = os.environ.get("LEFTOVER_CLASSIFIER", "auto")
-VISION_MODEL = os.environ.get("LEFTOVER_VISION_MODEL", "gpt-5.4-mini")
+VISION_MODEL = os.environ.get("LEFTOVER_VISION_MODEL", "gpt-6-luna")
 
 SEED_DEMO = os.environ.get("LEFTOVER_SEED_DEMO", "1") == "1"
 MAX_IMAGE_BYTES = 5 * 1024 * 1024

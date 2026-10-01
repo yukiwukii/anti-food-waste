@@ -5,7 +5,7 @@ Smart food-waste bins for NTU's North Spine and South Spine food courts. Each bi
 ## What it does
 
 - **Bin API**: the bin posts each weigh-in (stall, customer plate or vendor end-of-day, weight, optional photo) to the server. The server stores it in SQLite and refuses weigh-ins when the bin is full.
-- **Live bin camera**: the Live bin page streams from a webcam. Each weigh-in captures a frame, and OpenAI vision (`gpt-5.4-mini` by default) decides whether it is food waste, estimates what share of the weight is edible (rice versus bones or broth), and picks the dish from that stall's menu. Only weight × edible share counts as food waste. Select a row in the log to see the photo, the model's reasoning, its raw output and the prompt. If there is no photo, no API key, or the call fails, the full weight counts and the weigh-in is still saved.
+- **Live bin camera**: the Live bin page streams from a webcam. Each weigh-in captures a frame, and OpenAI vision (`gpt-6-luna` by default) decides whether it is food waste, estimates what share of the weight is edible (rice versus bones or broth), and picks the dish from that stall's menu. Only weight × edible share counts as food waste. Select a row in the log to see the photo, the model's reasoning, its raw output and the prompt. If there is no photo, no API key, or the call fails, the full weight counts and the weigh-in is still saved.
 - **Vendor insights**: vendors enter how many portions they cooked each day. Unsold food weighed at closing gives unsold portions, so portions sold = cooked − unsold. The suggested weekday prep is average sales plus half a standard deviation. The page also shows the daily and monthly savings.
 - **Compost tracking**: staff record each time a bin is emptied into compost. The page shows the total food diverted from the trash.
 - **Web dashboard** at `/`, with Live bin, Vendor insights, and Compost tabs.
@@ -81,7 +81,7 @@ Interactive API docs: http://127.0.0.1:8000/docs.
 | `LEFTOVER_DATABASE_URL` | SQLite in the data dir | Any SQLAlchemy URL |
 | `OPENAI_API_KEY` | none | Turns on photo recognition |
 | `LEFTOVER_CLASSIFIER` | `auto` | `auto` uses OpenAI when a photo is attached and a key is set; `off` never calls OpenAI |
-| `LEFTOVER_VISION_MODEL` | `gpt-5.4-mini` | OpenAI model for dish recognition |
+| `LEFTOVER_VISION_MODEL` | `gpt-6-luna` | OpenAI model for dish recognition |
 | `LEFTOVER_SEED_DEMO` | `1` | Add 14 days of demo history to an empty database |
 
 ## Limitations
